@@ -2,7 +2,7 @@
 id: STORY-05
 epic: EPIC-03
 title: Validate the network round-trip (echo peer)
-status: todo
+status: in-progress
 milestone: alpha-mvp
 ---
 
@@ -15,10 +15,10 @@ RP-side validation that fits a single ST.
 
 ## Tasks
 
-- [ ] Stand up an echo peer (TCP accept; echo bytes back) and point the firmware at it
-- [ ] MIDI Maze becomes MASTER and reaches the config screen, with bytes proven to cross the network and return
-- [ ] Byte-exact, in-order round-trip (no loss/reorder) over the link
-- [ ] A peer drop mid-handshake is recovered (per STORY-04)
+- [x] Stand up an echo peer (`tools/echo_peer.py`) and point the firmware at it
+- [x] MIDI Maze becomes MASTER with bytes proven to cross the network and return
+- [x] Byte-exact, in-order round-trip (no loss/reorder) over the link
+- [ ] A peer drop mid-handshake is recovered (validate alongside STORY-04 reconnect)
 
 ## Acceptance
 

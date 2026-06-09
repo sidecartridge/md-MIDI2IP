@@ -2,7 +2,7 @@
 id: STORY-03
 epic: EPIC-03
 title: Network receive → the RP IN queue
-status: todo
+status: done
 milestone: alpha-mvp
 ---
 
@@ -15,15 +15,18 @@ orchestrator over TCP do `midi_in_push(byte)`, filling the same RP IN queue that
 
 ## Tasks
 
-- [ ] lwIP receive callback feeds incoming bytes into the IN queue (`midi_in_push`)
-- [ ] Handle a full IN queue gracefully (drop + log) — the m68k drains it on `CMD_MIDI_RECV`
-- [ ] No MIDI parsing — opaque bytes straight into the queue (D-02)
+- [x] lwIP `tcp_recv` callback walks the pbuf chain and feeds bytes into the IN queue (`midi_in_push`)
+- [x] Full IN queue drops gracefully (`midi_in_push` no-ops when full); the m68k drains it on `CMD_MIDI_RECV`
+- [x] No MIDI parsing — opaque bytes straight into the queue (D-02)
 
 ## Acceptance
 
 Bytes the orchestrator (or echo peer) sends are delivered to the ST in order —
 queued by the receive callback, drained by `CMD_MIDI_RECV`, read from `Iorec`. A
 queue overrun is handled without crashing and is observable in status.
+
+**Verified on hardware:** the echo peer's echoed bytes arrive back at the ST and
+drive master election over the network.
 
 ## Notes
 

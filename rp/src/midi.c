@@ -92,8 +92,14 @@ static err_t midi_net_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
     pbuf_free(p);
     return err;
   }
-  // STORY-03 will push these bytes into the IN queue (midi_in_push). For
-  // STORY-01 (connection lifecycle) we just consume them.
+  // STORY-03: push received bytes into the IN queue; CMD_MIDI_RECV drains it
+  // into the shared buffer for the m68k. Opaque bytes (D-02) — no parsing.
+  for (struct pbuf *q = p; q != NULL; q = q->next) {
+    const uint8_t *bytes = (const uint8_t *)q->payload;
+    for (uint16_t i = 0; i < q->len; i++) {
+      midi_in_push(bytes[i]);
+    }
+  }
   tcp_recved(pcb, p->tot_len);
   pbuf_free(p);
   return ERR_OK;
@@ -136,6 +142,18 @@ static void midi_net_try_connect(void) {
   if (tcp_connect(midiNetPcb, &ip, MIDI_NET_PORT, midi_net_connected_cb) !=
       ERR_OK) {
     midi_net_reset();
+  }
+}
+
+// STORY-02: send one OUT byte to the orchestrator. Dropped if the link is down
+// (gameplay needs the peer up; STORY-04 surfaces link state). tcp_output flushes
+// immediately — TCP_NODELAY, MIDI is latency-sensitive (C-01).
+static void midi_net_send_byte(uint8_t b) {
+  if (midiNetState != MIDI_NET_UP || midiNetPcb == NULL) {
+    return;
+  }
+  if (tcp_write(midiNetPcb, &b, 1, TCP_WRITE_FLAG_COPY) == ERR_OK) {
+    tcp_output(midiNetPcb);
   }
 }
 
@@ -187,9 +205,10 @@ static void __not_in_flash_func(midi_command_cb)(TransmissionProtocol *protocol,
       break;
     }
     case CMD_MIDI_SEND: {
-      // m68k shipped an OUT byte. Loopback: echo it straight into the IN queue.
+      // m68k shipped an OUT byte — send it to the orchestrator. (Was the EPIC-02
+      // local echo; the echo now lives at the network peer.)
       uint32_t b = TPROTO_GET_PAYLOAD_PARAM32(payloadPtr);  // d3, byte in low 8 bits
-      midi_in_push((uint8_t)(b & 0xFFu));
+      midi_net_send_byte((uint8_t)(b & 0xFFu));
       break;
     }
     case CMD_MIDI_RECV: {

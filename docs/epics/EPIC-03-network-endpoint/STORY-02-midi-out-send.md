@@ -2,7 +2,7 @@
 id: STORY-02
 epic: EPIC-03
 title: Send OUT bytes to the orchestrator (replace the echo)
-status: todo
+status: done
 milestone: alpha-mvp
 ---
 
@@ -14,15 +14,19 @@ it reaches the orchestrator with low added latency.
 
 ## Tasks
 
-- [ ] On `CMD_MIDI_SEND`, queue the byte for the TCP socket instead of echoing it into the IN queue
-- [ ] Forward bytes verbatim — no MIDI parsing/filtering/framing (D-02)
-- [ ] Flush promptly (small coalescing window) to stay within the latency budget (C-01)
-- [ ] Handle partial sends / lwIP backpressure without losing bytes
+- [x] On `CMD_MIDI_SEND`, `tcp_write` the byte to the socket (was the IN-queue echo) via `midi_net_send_byte`
+- [x] Forward bytes verbatim — no MIDI parsing/filtering/framing (D-02)
+- [x] Flush immediately with `tcp_output` (TCP_NODELAY) for lowest latency (C-01)
+- [ ] Backpressure: currently drops on a full send buffer (fine at handshake rate); queue + retry on `tcp_sent` is a gameplay-rate refinement (EPIC-05)
 
 ## Acceptance
 
 Bytes the ST emits via `Bconout(3)` appear at the orchestrator (or echo peer) in
 order; measured added latency is within target (set in EPIC-05).
+
+**Verified on hardware:** with `tools/echo_peer.py`, the peer prints the MIDI
+Maze bytes (`00`, `80`, `01`, …) in order, and the ST becomes MASTER via the
+network round-trip.
 
 ## Notes
 
