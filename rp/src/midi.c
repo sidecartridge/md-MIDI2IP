@@ -15,6 +15,7 @@
 
 #include "midi.h"
 
+#include "blink.h"
 #include "chandler.h"
 #include "constants.h"  // __rom_in_ram_start__
 #include "debug.h"
@@ -52,7 +53,8 @@ static inline void __not_in_flash_func(midi_in_push)(uint8_t b) {
 // everything below runs from the main loop / lwIP poll context — no locking.
 #define MIDI_NET_HOST "192.168.1.41"  // DEV: laptop running tools/echo_peer.py
 #define MIDI_NET_PORT 5005
-#define MIDI_NET_RETRY_MS 3000
+#define MIDI_NET_BACKOFF_MIN_MS 500   // first reconnect delay
+#define MIDI_NET_BACKOFF_MAX_MS 8000  // backoff cap
 
 typedef enum {
   MIDI_NET_DOWN = 0,
@@ -64,8 +66,15 @@ static midi_net_state_t midiNetState = MIDI_NET_DOWN;
 static struct tcp_pcb *midiNetPcb = NULL;
 static absolute_time_t midiNetNextAttempt;
 static bool midiNetNextAttemptValid = false;
+static uint32_t midiNetBackoffMs = MIDI_NET_BACKOFF_MIN_MS;
+static bool midiNetLedSteady = false;  // LED currently held steady-on (link up)
 
-// Drop the PCB and go DOWN. Safe to call from any of our callbacks.
+// Discard pending IN bytes. On a link drop they're stale, and the m68k must not
+// inject them after a reconnect (STORY-04 defined reset behaviour). Single
+// consumer/producer on the bus loop, so the index assignment is atomic enough.
+static void midi_net_flush_in_queue(void) { midiInTail = midiInHead; }
+
+// Drop the PCB, flush stale IN bytes, and go DOWN. Safe from any callback.
 static void midi_net_reset(void) {
   if (midiNetPcb != NULL) {
     tcp_arg(midiNetPcb, NULL);
@@ -77,6 +86,7 @@ static void midi_net_reset(void) {
     }
     midiNetPcb = NULL;
   }
+  midi_net_flush_in_queue();
   midiNetState = MIDI_NET_DOWN;
 }
 
@@ -109,6 +119,7 @@ static void midi_net_err_cb(void *arg, err_t err) {
   (void)arg;
   // lwIP has already freed the PCB on error.
   midiNetPcb = NULL;
+  midi_net_flush_in_queue();
   midiNetState = MIDI_NET_DOWN;
   DPRINTF("MIDI net: error %d -> down\n", err);
 }
@@ -121,6 +132,7 @@ static err_t midi_net_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err) {
     return err;
   }
   midiNetState = MIDI_NET_UP;
+  midiNetBackoffMs = MIDI_NET_BACKOFF_MIN_MS;  // reset backoff on success
   DPRINTF("MIDI net: connected to %s:%d\n", MIDI_NET_HOST, MIDI_NET_PORT);
   return ERR_OK;
 }
@@ -157,9 +169,27 @@ static void midi_net_send_byte(uint8_t b) {
   }
 }
 
+// STORY-04: the on-board green LED mirrors the orchestrator link — steady on when
+// connected, blinking while down/connecting. blink_toogle() self-rate-limits at
+// CHARACTER_GAP_MS, and blink_on() is called once per UP transition (it talks to
+// the CYW43 over SPI, so we don't hammer it every tick).
+static void midi_net_update_led(void) {
+  if (midiNetState == MIDI_NET_UP) {
+    if (!midiNetLedSteady) {
+      blink_on();
+      midiNetLedSteady = true;
+    }
+    return;
+  }
+  midiNetLedSteady = false;
+  blink_toogle();
+}
+
 // Drive the connection. Call once per main-loop iteration (poll context). When
-// down, retries every MIDI_NET_RETRY_MS once Wi-Fi has an IP.
+// down, reconnects with exponential backoff (MIN..MAX) once Wi-Fi has an IP;
+// the backoff resets on a successful connect.
 void midi_net_poll(void) {
+  midi_net_update_led();
   if (midiNetState != MIDI_NET_DOWN) {
     return;
   }
@@ -170,11 +200,27 @@ void midi_net_poll(void) {
   absolute_time_t now = get_absolute_time();
   if (midiNetNextAttemptValid &&
       absolute_time_diff_us(now, midiNetNextAttempt) > 0) {
-    return;  // waiting for the retry interval
+    return;  // waiting for the backoff interval
   }
   midiNetNextAttemptValid = true;
-  midiNetNextAttempt = make_timeout_time_ms(MIDI_NET_RETRY_MS);
+  midiNetNextAttempt = make_timeout_time_ms(midiNetBackoffMs);
+  // Grow the backoff for the next attempt (reset to MIN on a successful connect).
+  uint32_t next = midiNetBackoffMs * 2;
+  midiNetBackoffMs =
+      (next > MIDI_NET_BACKOFF_MAX_MS) ? MIDI_NET_BACKOFF_MAX_MS : next;
   midi_net_try_connect();
+}
+
+// STORY-04: link state for the terminal status screen.
+const char *midi_net_status_str(void) {
+  switch (midiNetState) {
+    case MIDI_NET_UP:
+      return "up";
+    case MIDI_NET_CONNECTING:
+      return "connecting";
+    default:
+      return "down";
+  }
 }
 
 // Called from chandler_loop for every parsed command (kept in RAM — hot

@@ -22,6 +22,7 @@
 #include "display_term.h"
 #include "gconfig.h"
 #include "memfunc.h"
+#include "midi.h"
 #include "network.h"
 #include "reset.h"
 #include "romemul.h"
@@ -797,6 +798,7 @@ void term_printNetworkInfo(void) {
   TPRINTF("Host name : %s\n", hostName);
   TPRINTF("WiFi      : %s (%s)\n", wifiMode, wifiLink);
   TPRINTF("IP        : %s (%s)\n", ipAddress, ipMode);
+  TPRINTF("MIDI link : %s\n", midi_net_status_str());
   TPRINTF("Netmask   : %s\n", netmask);
   TPRINTF("Gateway   : %s\n", gateway);
   TPRINTF("DNS       : %s, %s\n", dns1, dns2);

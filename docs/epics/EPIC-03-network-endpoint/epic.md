@@ -46,6 +46,7 @@ The m68k side and the byte-pipe protocol (`CMD_MIDI_SEND`/`CMD_MIDI_RECV`,
 - STORY-04 — Error handling, reconnect, link status
 - STORY-05 — Validate the network round-trip (echo peer)
 - STORY-06 — Endpoint liveness ping command
+- STORY-07 — Remove unused HTTP/HTTPS/TLS plumbing
 
 ## Notes
 
