@@ -41,4 +41,8 @@
 // firmware image is copied to RAM.
 void midi_init(void);
 
+// EPIC-03: drive the TCP connection to the orchestrator. Call once per main-loop
+// iteration (lwIP poll context). No-op until Wi-Fi has an IP.
+void midi_net_poll(void);
+
 #endif  // MIDI_H

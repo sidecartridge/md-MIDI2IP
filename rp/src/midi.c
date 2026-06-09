@@ -18,7 +18,11 @@
 #include "chandler.h"
 #include "constants.h"  // __rom_in_ram_start__
 #include "debug.h"
+#include "lwip/ip_addr.h"
+#include "lwip/tcp.h"
 #include "memfunc.h"    // WRITE_AND_SWAP_LONGWORD
+#include "network.h"    // network_getCurrentIp
+#include "pico/time.h"
 #include "tprotocol.h"  // TransmissionProtocol, TPROTO_* payload macros
 
 // --- EPIC-02 IN queue ---
@@ -36,6 +40,123 @@ static inline void __not_in_flash_func(midi_in_push)(uint8_t b) {
   if (next == midiInTail) return;  // full: drop
   midiInQueue[midiInHead] = b;
   midiInHead = next;
+}
+
+// --- EPIC-03 STORY-01: TCP client to the orchestrator ---
+// Connection lifecycle only: connect to a hardcoded dev endpoint and track
+// state. Sending (STORY-02) and receive→IN-queue (STORY-03) come next; for now
+// the receive callback discards data. EPIC-04 makes the endpoint configurable.
+//
+// DEV: set MIDI_NET_HOST to the machine running the echo peer (see the EPIC-03
+// STORY-05 echo server). The RP is a raw-TCP client (lwIP NO_SYS poll mode), so
+// everything below runs from the main loop / lwIP poll context — no locking.
+#define MIDI_NET_HOST "192.168.1.41"  // DEV: laptop running tools/echo_peer.py
+#define MIDI_NET_PORT 5005
+#define MIDI_NET_RETRY_MS 3000
+
+typedef enum {
+  MIDI_NET_DOWN = 0,
+  MIDI_NET_CONNECTING,
+  MIDI_NET_UP,
+} midi_net_state_t;
+
+static midi_net_state_t midiNetState = MIDI_NET_DOWN;
+static struct tcp_pcb *midiNetPcb = NULL;
+static absolute_time_t midiNetNextAttempt;
+static bool midiNetNextAttemptValid = false;
+
+// Drop the PCB and go DOWN. Safe to call from any of our callbacks.
+static void midi_net_reset(void) {
+  if (midiNetPcb != NULL) {
+    tcp_arg(midiNetPcb, NULL);
+    tcp_recv(midiNetPcb, NULL);
+    tcp_err(midiNetPcb, NULL);
+    tcp_sent(midiNetPcb, NULL);
+    if (tcp_close(midiNetPcb) != ERR_OK) {
+      tcp_abort(midiNetPcb);
+    }
+    midiNetPcb = NULL;
+  }
+  midiNetState = MIDI_NET_DOWN;
+}
+
+static err_t midi_net_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
+                              err_t err) {
+  (void)arg;
+  if (p == NULL) {  // peer closed the connection
+    DPRINTF("MIDI net: peer closed -> down\n");
+    midi_net_reset();
+    return ERR_OK;
+  }
+  if (err != ERR_OK) {
+    pbuf_free(p);
+    return err;
+  }
+  // STORY-03 will push these bytes into the IN queue (midi_in_push). For
+  // STORY-01 (connection lifecycle) we just consume them.
+  tcp_recved(pcb, p->tot_len);
+  pbuf_free(p);
+  return ERR_OK;
+}
+
+static void midi_net_err_cb(void *arg, err_t err) {
+  (void)arg;
+  // lwIP has already freed the PCB on error.
+  midiNetPcb = NULL;
+  midiNetState = MIDI_NET_DOWN;
+  DPRINTF("MIDI net: error %d -> down\n", err);
+}
+
+static err_t midi_net_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err) {
+  (void)arg;
+  (void)pcb;
+  if (err != ERR_OK) {
+    midi_net_reset();
+    return err;
+  }
+  midiNetState = MIDI_NET_UP;
+  DPRINTF("MIDI net: connected to %s:%d\n", MIDI_NET_HOST, MIDI_NET_PORT);
+  return ERR_OK;
+}
+
+static void midi_net_try_connect(void) {
+  ip_addr_t ip;
+  if (!ipaddr_aton(MIDI_NET_HOST, &ip)) {
+    return;
+  }
+  midiNetPcb = tcp_new();
+  if (midiNetPcb == NULL) {
+    return;
+  }
+  tcp_nagle_disable(midiNetPcb);  // TCP_NODELAY — MIDI is latency-sensitive (D-03/C-01)
+  tcp_arg(midiNetPcb, NULL);
+  tcp_recv(midiNetPcb, midi_net_recv_cb);
+  tcp_err(midiNetPcb, midi_net_err_cb);
+  midiNetState = MIDI_NET_CONNECTING;
+  if (tcp_connect(midiNetPcb, &ip, MIDI_NET_PORT, midi_net_connected_cb) !=
+      ERR_OK) {
+    midi_net_reset();
+  }
+}
+
+// Drive the connection. Call once per main-loop iteration (poll context). When
+// down, retries every MIDI_NET_RETRY_MS once Wi-Fi has an IP.
+void midi_net_poll(void) {
+  if (midiNetState != MIDI_NET_DOWN) {
+    return;
+  }
+  ip_addr_t myip = network_getCurrentIp();
+  if (ip_addr_isany_val(myip)) {
+    return;  // Wi-Fi not up yet
+  }
+  absolute_time_t now = get_absolute_time();
+  if (midiNetNextAttemptValid &&
+      absolute_time_diff_us(now, midiNetNextAttempt) > 0) {
+    return;  // waiting for the retry interval
+  }
+  midiNetNextAttemptValid = true;
+  midiNetNextAttempt = make_timeout_time_ms(MIDI_NET_RETRY_MS);
+  midi_net_try_connect();
 }
 
 // Called from chandler_loop for every parsed command (kept in RAM — hot

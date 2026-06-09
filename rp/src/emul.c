@@ -478,6 +478,9 @@ void emul_start() {
 #else
     sleep_ms(SLEEP_LOOP_MS);
 #endif
+    // EPIC-03: drive the orchestrator TCP connection (no-op until Wi-Fi is up).
+    midi_net_poll();
+
     // Drain the ROM3 command ring → dispatch to registered callbacks.
     chandler_loop();
 
