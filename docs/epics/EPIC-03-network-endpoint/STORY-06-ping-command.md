@@ -7,8 +7,8 @@ status: todo
 
 ## Goal
 
-Give the user (and the harness) a way to confirm the remote MIDI endpoint is
-alive without sending MIDI traffic.
+Give the user a way to confirm the orchestrator endpoint is alive without sending
+MIDI traffic.
 
 ## Tasks
 

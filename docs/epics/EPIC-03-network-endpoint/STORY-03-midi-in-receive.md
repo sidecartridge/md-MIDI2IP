@@ -1,15 +1,16 @@
 ---
 id: STORY-03
 epic: EPIC-03
-title: Network receive → MIDI IN bytes
+title: Network receive → fill the IN ring
 status: todo
 milestone: alpha-mvp
 ---
 
 ## Goal
 
-Take bytes arriving from the remote endpoint and push them into the IN ring for
-the m68k `Bconin` hook to deliver.
+Replace the IN side of EPIC-02's RP-local echo: instead of filling the IN ring
+from the drained OUT bytes, fill it from bytes arriving from the orchestrator,
+for the m68k to inject into the `Iorec` buffer.
 
 ## Tasks
 
@@ -19,9 +20,11 @@ the m68k `Bconin` hook to deliver.
 
 ## Acceptance
 
-Bytes sent by the remote peer are delivered to the ST in order via `Bconin`; an
-overrun is handled without crashing and is observable in status.
+Bytes from the orchestrator are delivered to the ST in order (read from the
+`Iorec` buffer); an overrun is handled without crashing and is observable in
+status.
 
 ## Notes
 
-Pairs with EPIC-01 STORY-04 and EPIC-02 STORY-03.
+Together with STORY-02 this turns EPIC-02's RP-local echo (STORY-03 there) into a
+network exchange; the m68k IN-ring → `Iorec` path (EPIC-02 STORY-02) is unchanged.
