@@ -145,6 +145,12 @@ void term_setCommands(const Command *cmds, size_t count) {
 void __not_in_flash_func(term_command_cb)(TransmissionProtocol *protocol,
                                           uint16_t *payloadPtr) {
   (void)payloadPtr;
+  // Only buffer terminal-namespace commands (high byte 0x00). Other apps'
+  // commands (e.g. MIDI, 0x03xx) are handled by their own callbacks and must
+  // not flood the terminal log — especially the per-byte MIDI traffic.
+  if ((protocol->command_id & 0xFF00u) != 0x0000u) {
+    return;
+  }
   uint8_t writeIndex = protocolWriteIndex;
   TransmissionProtocol *writeBuffer = &protocolBuffers[writeIndex];
 

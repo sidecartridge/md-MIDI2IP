@@ -20,12 +20,14 @@ EPIC-02/03 later route through the RP and the network.
 - [x] In the `Bconout(3)` hook, echo each captured byte into the Iorec input buffer, then chain so Bconout still returns normally
 - [x] Confirm master election: the ST receives its own `0x00` and becomes MASTER
 - [x] Confirm non-MIDI I/O is undisturbed (boots to GEM, keyboard/screen normal, no instability)
-- [x] Confirm solo gameplay against drones
+- [x] Confirm MIDI Maze reaches MASTER + the config screen via the loopback
 
 ## Acceptance
 
-On a single ST with the cartridge and no peers, MIDI Maze starts, becomes MASTER,
-and plays solo. Confirmed on hardware (MASTER reached).
+On a single ST with the cartridge and no peers, MIDI Maze becomes MASTER and
+reaches the config screen, proving the local loopback delivers its own MIDI back.
+Confirmed on hardware. (It does **not** start a match — MIDI Maze waits for a
+SLAVE; that needs a 2nd node, D-09 / EPIC-03.)
 
 ## Notes
 
