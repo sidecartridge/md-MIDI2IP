@@ -14,7 +14,7 @@ surface link status (LED / terminal) so the user knows what's happening.
 
 - [ ] Detect disconnect/error and schedule a backoff reconnect
 - [ ] Surface state via the LED blink status and/or terminal
-- [ ] Ensure rings don't corrupt across a reconnect (defined reset behaviour)
+- [ ] Ensure the IN queue doesn't corrupt across a reconnect (defined reset behaviour)
 
 ## Acceptance
 
