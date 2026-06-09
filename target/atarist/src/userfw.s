@@ -129,6 +129,32 @@ midi_save_vector:
     jsr     (a0)
     rts
 
+; ---------------------------------------------------------------------
+; Inject one byte (d0.b) into the MIDI Iorec input buffer, the way TOS does:
+; advance the head, then store at the new head; drop on overflow. Used to
+; deliver bytes pulled from the RP. Preserves d0/d3 and the rest (saves
+; d1/d2/a1/a2 itself).
+; ---------------------------------------------------------------------
+iorec_put:
+    movem.l d1/d2/a1-a2, -(sp)
+    movea.l midi_iorec_ptr, a1
+    move.l  a1, d1
+    beq.s   .ip_done                    ; Iorec pointer not cached -> drop
+    movea.l IOREC_IBUF(a1), a2
+    move.w  IOREC_IBUFHD(a1), d2        ; head
+    addq.w  #1, d2                       ; advance first
+    cmp.w   IOREC_IBUFSIZ(a1), d2
+    blt.s   .ip_nowrap
+    moveq   #0, d2
+.ip_nowrap:
+    cmp.w   IOREC_IBUFTL(a1), d2        ; head caught tail -> full
+    beq.s   .ip_done
+    move.w  d2, IOREC_IBUFHD(a1)        ; commit new head
+    move.b  d0, (a2, d2.w)              ; store at new head
+.ip_done:
+    movem.l (sp)+, d1/d2/a1-a2
+    rts
+
 ; Cached MIDI IOREC pointer (patched by the RP at install). 4-byte aligned
 ; so the RP's longword write is aligned.
     ds.b ((4 - (* & 3)) & 3)
@@ -138,11 +164,11 @@ midi_iorec_ptr:
 ; ---------------------------------------------------------------------
 ; BIOS (trap #13) hook, XBRA-wrapped.
 ;
-; Loopback: on Bconout(device 3) we echo the byte into the MIDI Iorec
-; input buffer (write at the head, advance it), so the ST receives its own
-; output. We then chain to the original Bconout (which still drives the
-; physical port and returns normally). Bconin/Bconstat and the XBIOS
-; readback then read the byte from that same Iorec buffer.
+; On Bconout(device 3) we ship the byte to the RP (CMD_MIDI_SEND), then pull
+; any pending bytes back (CMD_MIDI_RECV) and inject them into the MIDI Iorec
+; input buffer, so Bconin / the XBIOS readback read them. The RP echoes
+; OUT->IN (EPIC-02); EPIC-03 replaces that echo with the network. We then
+; chain to the original Bconout, which still returns normally.
 ; ---------------------------------------------------------------------
     ds.b ((4 - (* & 3)) & 3)             ; 4-byte align (RP writes <old> as a longword)
     dc.l 'XBRA'
@@ -151,7 +177,7 @@ bios_xbra_old:
     dc.l 0                              ; original trap #13 vector — patched by the RP
 midi_bios_trap:
     ; locate the call arguments (md-drives-emulator pattern):
-    ; 6(a0) = function, 8(a0) = device, 10(a0) = char word (11(a0) = low byte)
+    ; 6(a0) = function, 8(a0) = device, 11(a0) = char low byte
     btst    #5, (sp)                     ; S bit of the saved SR: 0 = user mode
     beq.s   .mbt_user
     move.l  sp, a0
@@ -170,27 +196,33 @@ midi_bios_trap:
     cmp.w   #MIDI_DEV, 8(a0)             ; device 3 (MIDI)?
     bne.s   .mbt_chain
 
-    ; --- echo the byte into the MIDI Iorec input buffer ---
-    movem.l d2/a1-a2, -(sp)
-    movea.l midi_iorec_ptr, a1          ; a1 = MIDI IOREC*
-    move.l  a1, d2
-    beq.s   .mbt_inject_done            ; pointer not cached → skip the echo
-    movea.l IOREC_IBUF(a1), a2          ; a2 = ibuf
-    ; TOS fills the input record by advancing the head FIRST, then storing
-    ; at the new head; readers (Bconin / the readback) advance the tail and
-    ; read at the new tail. Match that exactly, and drop on overflow.
-    move.w  IOREC_IBUFHD(a1), d2        ; d2 = head
-    addq.w  #1, d2                       ; head++
-    cmp.w   IOREC_IBUFSIZ(a1), d2       ; wrap at end of buffer
-    blt.s   .mbt_nowrap
-    moveq   #0, d2
-.mbt_nowrap:
-    cmp.w   IOREC_IBUFTL(a1), d2        ; head caught the tail -> buffer full
-    beq.s   .mbt_inject_done            ; full: drop the byte
-    move.w  d2, IOREC_IBUFHD(a1)        ; commit the new head
-    move.b  11(a0), (a2, d2.w)          ; store the byte at the new head
-.mbt_inject_done:
-    movem.l (sp)+, d2/a1-a2
+    movem.l d0-d7/a0-a6, -(sp)
+
+    ; --- ship the OUT byte to the RP (CMD_MIDI_SEND, d3 = byte) ---
+    moveq   #0, d3
+    move.b  11(a0), d3                  ; d3 = OUT byte (low byte)
+    moveq   #4, d1                      ; payload: d3
+    move.w  #CMD_MIDI_SEND, d0
+    move.l  #send_sync_command_to_sidecart, a0
+    jsr     (a0)
+
+    ; --- pull pending IN bytes from the RP (CMD_MIDI_RECV, no payload) ---
+    moveq   #0, d1
+    move.w  #CMD_MIDI_RECV, d0
+    move.l  #send_sync_command_to_sidecart, a0
+    jsr     (a0)
+
+    ; --- inject MIDI_IN_COUNT bytes from MIDI_IN_BUFFER into Iorec ---
+    move.l  MIDI_IN_COUNT_ADDR, d3      ; count the RP wrote
+    beq.s   .mbt_no_in
+    move.l  #MIDI_IN_BUFFER_ADDR, a3
+.mbt_in_loop:
+    move.b  (a3)+, d0
+    bsr     iorec_put
+    subq.l  #1, d3
+    bne.s   .mbt_in_loop
+.mbt_no_in:
+    movem.l (sp)+, d0-d7/a0-a6
 
 .mbt_chain:
     move.l  bios_xbra_old, -(sp)         ; chain to original (XBRA <old> field)

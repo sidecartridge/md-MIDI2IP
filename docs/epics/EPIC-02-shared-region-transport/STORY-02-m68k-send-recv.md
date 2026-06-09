@@ -2,7 +2,7 @@
 id: STORY-02
 epic: EPIC-02
 title: m68k — ship OUT via CMD_MIDI_SEND; pull IN via CMD_MIDI_RECV → Iorec
-status: todo
+status: done
 milestone: alpha-mvp
 ---
 
@@ -13,10 +13,10 @@ echo. The two directions are independent.
 
 ## Tasks
 
-- [ ] OUT: the `Bconout(3)` hook ships the captured byte via `send_sync CMD_MIDI_SEND`, then chains and returns — no readback
-- [ ] IN: issue `CMD_MIDI_RECV`, read `MIDI_IN_COUNT` + copy `MIDI_IN_BUFFER`, and inject those bytes into the `Iorec` buffer (the EPIC-01 advance-first inject)
-- [ ] Pick the IN-pull cadence — the vsync `check_commands` loop and/or the `Bconstat(3)` path — so injected bytes appear promptly without flooding the command channel
-- [ ] Remove the EPIC-01 local echo
+- [x] OUT: the `Bconout(3)` hook ships the captured byte via `send_sync CMD_MIDI_SEND`, then chains and returns — no readback
+- [x] IN: issue `CMD_MIDI_RECV`, read `MIDI_IN_COUNT` + copy `MIDI_IN_BUFFER`, and inject those bytes into the `Iorec` buffer (the EPIC-01 advance-first inject)
+- [x] Pick the IN-pull cadence — the vsync `check_commands` loop and/or the `Bconstat(3)` path — so injected bytes appear promptly without flooding the command channel
+- [x] Remove the EPIC-01 local echo
 
 ## Acceptance
 

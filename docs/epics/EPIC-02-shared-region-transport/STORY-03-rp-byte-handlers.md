@@ -2,7 +2,7 @@
 id: STORY-03
 epic: EPIC-02
 title: RP — byte queues + OUT→IN echo (CMD_MIDI_SEND/RECV handlers)
-status: todo
+status: done
 milestone: alpha-mvp
 ---
 
@@ -13,10 +13,10 @@ the loopback on the RP by echoing OUT into IN. App-agnostic — just bytes.
 
 ## Tasks
 
-- [ ] `CMD_MIDI_SEND`: read the byte(s) from the command payload and enqueue them (OUT queue)
-- [ ] Echo: move OUT-queue bytes into the IN queue (the RP-local loopback; later replaced by the network)
-- [ ] `CMD_MIDI_RECV`: drain the IN queue into the shared `MIDI_IN_BUFFER`, write `MIDI_IN_COUNT`, then let chandler bump the token (like GEMDRIVE `READ_BUFFER`)
-- [ ] Keep both handlers non-blocking and bounded — the bus loop runs hot (225 MHz)
+- [x] `CMD_MIDI_SEND`: read the byte(s) from the command payload and enqueue them (OUT queue)
+- [x] Echo: move OUT-queue bytes into the IN queue (the RP-local loopback; later replaced by the network)
+- [x] `CMD_MIDI_RECV`: drain the IN queue into the shared `MIDI_IN_BUFFER`, write `MIDI_IN_COUNT`, then let chandler bump the token (like GEMDRIVE `READ_BUFFER`)
+- [x] Keep both handlers non-blocking and bounded — the bus loop runs hot (225 MHz)
 
 ## Acceptance
 
