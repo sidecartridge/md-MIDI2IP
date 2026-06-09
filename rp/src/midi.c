@@ -54,4 +54,10 @@ static void __not_in_flash_func(midi_command_cb)(TransmissionProtocol *protocol,
   }
 }
 
-void midi_init(void) { chandler_addCB(midi_command_cb); }
+void midi_init(void) {
+  // No pending MIDI-IN bytes at boot. The RP owns this field in the served ROM
+  // image; the m68k only ever reads it (CMD_MIDI_RECV).
+  WRITE_AND_SWAP_LONGWORD((unsigned int)&__rom_in_ram_start__,
+                          MIDI_IN_COUNT_OFFSET, 0);
+  chandler_addCB(midi_command_cb);
+}

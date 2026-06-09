@@ -31,6 +31,17 @@ ROM4_ADDR            equ $FA0000
 APP_MIDI             equ $0300
 CMD_MIDI_SAVE_VECTOR equ (APP_MIDI + 0)          ; $0300: patch a ROM longword field
 
+; --- EPIC-02 byte pipe (must match rp/src/include/midi.h) ---
+; Dumb transport: ship captured OUT bytes to the RP, pull pending IN bytes back.
+CMD_MIDI_SEND        equ (APP_MIDI + 1)          ; $0301: m68k -> RP, ship OUT bytes
+CMD_MIDI_RECV        equ (APP_MIDI + 2)          ; $0302: m68k -> RP, request IN bytes
+
+; Shared MIDI-IN buffer in the APP_FREE arena ($FA2300). The RP writes the count
+; + bytes; the m68k only reads them (it owns no state in the ROM region).
+MIDI_IN_COUNT_ADDR   equ (ROM4_ADDR + $2300)     ; $FA2300: longword pending byte count
+MIDI_IN_BUFFER_ADDR  equ (ROM4_ADDR + $2304)     ; $FA2304: the bytes
+MIDI_IN_BUFFER_SIZE  equ 256
+
 ; --- BIOS / XBIOS install ---
 Setexc               equ 5           ; BIOS function 5: Setexc(vecnum, newvec)
 Iorec                equ 14          ; XBIOS function 14: Iorec(dev) -> IOREC*
