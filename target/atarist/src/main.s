@@ -340,6 +340,9 @@ rom_function:
 
 ; Shared functions included at the end of the file
 ; Don't forget to include the macros for the shared functions at the top of file
+; Export the sync-command helper so the user firmware module (userfw.s) can
+; reuse it via `bsr` instead of duplicating the whole protocol.
+    xdef send_sync_command_to_sidecart
     include "inc/sidecart_functions.s"
 
 

@@ -1,15 +1,18 @@
 ---
 id: STORY-01
 epic: EPIC-05
-title: Loopback against a desktop network-MIDI bridge
+title: Desktop test peer / network-MIDI bridge
 status: todo
 milestone: alpha-mvp
 ---
 
 ## Goal
 
-Stand up a desktop peer that bridges the network stream to a host MIDI port, and
-verify a real ST app can play a synth/DAW through it (and receive).
+Stand up a desktop peer that connects to the firmware over the network. It serves
+two roles: a **stand-in second player** so single-ST MIDI Maze can be validated
+(EPIC-03 STORY-05) without a second machine, and a **bridge to a host MIDI port**
+so a real ST app can drive a synth/DAW (and receive) — the general MIDI-to-IP
+use case.
 
 ## Tasks
 

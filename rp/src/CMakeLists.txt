@@ -114,6 +114,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         emul.c
         gconfig.c
         hw_config.c
+        midi.c
         network.c
         reset.c
         romemul.c

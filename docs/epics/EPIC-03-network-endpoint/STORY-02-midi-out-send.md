@@ -1,14 +1,15 @@
 ---
 id: STORY-02
 epic: EPIC-03
-title: MIDI OUT bytes → network send
+title: Drain the OUT ring → network send
 status: todo
 milestone: alpha-mvp
 ---
 
 ## Goal
 
-Send the bytes drained from the OUT ring to the remote endpoint with low added
+Replace the OUT side of EPIC-02's RP-local echo: instead of copying drained
+OUT-ring bytes into the IN ring, send them to the orchestrator with low added
 latency.
 
 ## Tasks
@@ -20,7 +21,7 @@ latency.
 
 ## Acceptance
 
-Bytes the ST emits appear at the remote peer in order; measured added latency is
+Bytes the ST emits appear at the orchestrator in order; measured added latency is
 within target (set in EPIC-05).
 
 ## Notes

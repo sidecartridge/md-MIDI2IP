@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-01
 title: Install and chain BIOS/XBIOS trap vectors safely
-status: todo
+status: done
 milestone: alpha-mvp
 ---
 
@@ -14,10 +14,10 @@ routine for everything we don't care about.
 
 ## Tasks
 
-- [ ] Save the original BIOS/XBIOS vector addresses (Supexec / supervisor mode)
-- [ ] Install our trap handlers and chain unmatched calls to the originals
-- [ ] Restore original vectors on cartridge reset / RESET command
-- [ ] Confirm non-MIDI BIOS/XBIOS calls behave identically (boot to desktop)
+- [x] Save the original BIOS/XBIOS vector addresses (Supexec / supervisor mode)
+- [x] Install our trap handlers and chain unmatched calls to the originals
+- [x] Restore original vectors on cartridge reset / RESET command
+- [x] Confirm non-MIDI BIOS/XBIOS calls behave identically (boot to desktop)
 
 ## Acceptance
 
@@ -33,3 +33,16 @@ Filter strictly: act only on **device 3** (MIDI). The same BIOS wrapper serves
 device 2 (console/keyboard/screen — MIDI Maze's "Lee de teclado"/"Escribe por
 pantalla" calls); those, and all non-MIDI BIOS/XBIOS traffic, must chain through
 untouched so keyboard and screen I/O are undisturbed.
+
+### Done (hardware-verified)
+
+Implemented with the **XBRA** convention (cookie `'SDMI'`), matching
+md-drives-emulator: BIOS installed via `Setexc($2D)`, XBIOS via direct `$B8`
+poke; the original vectors live in each handler's XBRA `<old>` field, which the
+RP patches into the served ROM image (`CMD_MIDI_SAVE_VECTOR` → `rp/src/midi.c`).
+Verified on real hardware: boots to the GEM desktop, keyboard/screen normal (so
+non-MIDI chaining is transparent), no instability, and a warm reset rebuilds the
+OS vectors. A follow-on cable-free **loopback** (echo `Bconout(3)` into the
+`Iorec(2)` MIDI input buffer) then let MIDI Maze become MASTER on a single
+machine — confirming the full hook → capture → inject → read path and the D-05
+input route.

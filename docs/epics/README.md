@@ -71,30 +71,36 @@ iterate on here so EPIC-03 has a stable target.
 
 ## Roadmap & sequencing
 
-The epics layer bottom-up; the self-test harness is extended at each layer:
+**Linear flow:** each epic is fully completable before the next begins. The
+working loopback moves outward one layer at a time — the observable result (solo
+MIDI Maze becomes MASTER and plays) holds at every step until EPIC-03 adds real
+multiplayer:
 
 ```
-EPIC-01 hooks ──▶ EPIC-02 transport ──▶ EPIC-03 network
-   (self-test scaffold) ─▶ (real rings) ─▶ (network round-trip)
+EPIC-01  hook + LOCAL loopback     (all m68k; echo in the Atari)
+   │  done — solo MIDI Maze plays
+   ▼
+EPIC-02  ring transport            (echo moves to the RP via shared-region rings)
+   │  same solo game, data now crosses to the RP
+   ▼
+EPIC-03  network                   (echo becomes a round-trip to the orchestrator)
+      multiplayer over IP
+
 EPIC-04 config/UI/cleanup  and  EPIC-05 validation span the others.
 ```
 
-Build order: EPIC-01 → EPIC-02 → EPIC-03. EPIC-04 STORY-01 (config) is needed
-early (endpoint must be configurable); STORY-03 (trim) runs **last**, once
-"unused" is unambiguous. EPIC-05 STORY-02 (latency tuning) follows a working
-path.
+Build order: EPIC-01 → EPIC-02 → EPIC-03, one at a time. EPIC-04 STORY-01 (config)
+is needed once the endpoint must be configurable; STORY-03 (trim) runs **last**.
+EPIC-05 STORY-02 (latency tuning) follows a working path.
 
-### Alpha MVP — MIDI Maze, 2 players over IP
+### Alpha MVP — MIDI Maze over IP
 
-The alpha cut is the minimum to play 2-player MIDI Maze over IP: capture its
-MIDI OUT (BIOS `Bconout(3)`) and serve its MIDI IN — both the BIOS
-`Bconin`/`Bconstat(3)` poll and the XBIOS `trap #14` readback MIDI Maze does after
-each write (D-05) — (EPIC-01), move bytes through the rings (EPIC-02), forward
-them to the Python orchestrator and back (EPIC-03 STORY-01/02/03/05), with a
-green self-test. Stories in this cut carry `milestone: alpha-mvp`; the
-cockpit reports their progress on a dedicated line. Out of the alpha cut: the
-XBIOS `Midiws` hook (EPIC-01 STORY-02, unused by MIDI Maze), reconnect polish,
-ping, the status UI, latency tuning, and template trimming.
+The alpha cut plays MIDI Maze across the network. EPIC-01 delivers a self-
+contained solo game (local loopback); EPIC-02 routes it through the RP; EPIC-03
+connects two players via the Python orchestrator. Stories in this cut carry
+`milestone: alpha-mvp`; the cockpit reports their progress on a dedicated line.
+Out of the alpha cut: the XBIOS `Midiws` hook (unused by MIDI Maze, D-05),
+reconnect polish, ping, the status UI, latency tuning, and template trimming.
 
 ## Adding work
 

@@ -1,53 +1,47 @@
 ---
 id: EPIC-01
-title: m68k BIOS/XBIOS MIDI call hooking
-status: todo
+title: m68k MIDI hooking + local loopback
+status: done
 ---
 
 ## Goal
 
-Intercept the Atari ST OS calls that move MIDI bytes so traffic can be diverted
-to the cartridge (and from there to the network) instead of only the physical
-MIDI ACIA. This is the foundation everything else builds on.
+Intercept the Atari ST OS calls MIDI Maze uses for MIDI I/O and wire a
+**local loopback** so a single ST plays MIDI Maze solo (a "ring of one") with
+**no MIDI cable, no second ST, no RP transport, and no network**. This proves
+the whole m68k path — hook → capture output → inject input — end to end, and is
+a self-contained, demonstrable milestone. Later epics move the loopback outward:
+EPIC-02 routes it through the RP via shared-region rings, EPIC-03 over the
+network to the orchestrator.
 
 ## Scope
 
-- In scope: installing/chaining the BIOS (`trap #13`) and XBIOS (`trap #14`)
-  vectors, filtering for the MIDI device (BIOS device 3) and XBIOS `Midiws`,
-  and handing bytes to/from the shared region.
-- Out of scope: the transport ring buffers (EPIC-02) and networking (EPIC-03).
-  This epic only captures/injects bytes at the OS boundary. The exception is
-  STORY-05's test-only RP loopback (OUT→IN echo), a validation scaffold that the
-  real transport later replaces.
+- In scope (all m68k-side): installing/chaining the BIOS (`trap #13`) and XBIOS
+  (`trap #14`) vectors via XBRA, capturing `Bconout(3)` output, injecting into
+  the `Iorec(2)` MIDI input buffer, and echoing output→input locally.
+- Out of scope: the shared-region rings and RP transport (EPIC-02) and the
+  network (EPIC-03). EPIC-01 keeps everything on the Atari; nothing crosses to
+  the RP except the one-time install handshake.
 
 ## Assumptions & risks
 
-- **Target is MIDI Maze** (D-01), which does MIDI I/O through the OS calls — so
-  hooking BIOS/XBIOS captures it. Apps that drive the 6850 MIDI ACIA registers
-  directly and run their own MIDI interrupt handler are **out of scope**: those
-  I/O cycles never reach the cartridge, so this approach can't intercept them.
-- **MIDI Maze's call paths (D-05, from the disassembly + thesis §2.4.2):** it uses
-  **both BIOS and XBIOS**. Output = BIOS `Bconout(3)` (`trap #13`). Input = BIOS
-  `Bconstat(3)`/`Bconin(3)` polling in the game loop **plus** an **XBIOS `trap #14`
-  MIDI-IN read after every write** (via wrappers `$188f0`→`$341a2`) — the ring
-  readback that drives master election and per-frame sync. So we **must hook both
-  trap #13 and trap #14**, and the XBIOS read is MVP-critical, not optional
-  (un-serviced, MIDI Maze's send routines abort). The exact XBIOS fn# for the
-  readback is unconfirmed in the source — likely `Iorec(2)`; pin it down during
-  bring-up. (`Midiws` is not used; STORY-02 stays generality-only.)
-- **Code-budget risk:** the hooks + ring helpers (EPIC-02) + dispatch share the
-  6 KB `userfw` budget; the STORY-05 self-test adds to it (test build only).
+- **MIDI Maze's call paths are confirmed** (D-05, on hardware): output via BIOS
+  `Bconout(3)`; input read from the system MIDI `Iorec(2)` buffer (which both
+  `Bconin(3)` and the XBIOS readback consume). `Midiws` is **not** used, so it's
+  out of scope.
+- **Code-budget:** the hooks + loopback share the 6 KB `userfw` budget; current
+  build is well under the 8 KB cartridge cap.
 
 ## Stories
 
-- STORY-01 — Install and chain BIOS/XBIOS trap vectors safely
-- STORY-02 — Hook XBIOS Midiws (MIDI output)
-- STORY-03 — Hook BIOS Bconout/Bcostat device 3 (MIDI output)
-- STORY-04 — Hook BIOS Bconin/Bconstat device 3 (MIDI input)
-- STORY-05 — Automated MIDI hook validation harness (capstone)
+- STORY-01 — Install and chain BIOS/XBIOS trap vectors safely (XBRA)
+- STORY-02 — Capture MIDI output (BIOS Bconout, device 3)
+- STORY-03 — Inject MIDI input (the Iorec(2) buffer)
+- STORY-04 — Local loopback: solo MIDI Maze (ring of one)
 
 ## Notes
 
-The hooking logic lives in `target/atarist/src/userfw.s` (currently the Cconws
-stub). Preserve the original vectors and restore them on reset so a crash can't
-leave the machine pointing at unmapped cartridge code.
+Implemented in `target/atarist/src/userfw.s` with a one-time RP handshake
+(`rp/src/midi.c`) that patches the saved vectors / Iorec pointer into the served
+ROM image. Confirmed on hardware: boots to GEM (non-MIDI undisturbed), and MIDI
+Maze becomes MASTER on a single machine.

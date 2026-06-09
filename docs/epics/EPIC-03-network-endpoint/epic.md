@@ -6,24 +6,28 @@ status: todo
 
 ## Goal
 
-Carry the MIDI byte streams between the RP firmware and a configured remote
-endpoint over the network (Wi-Fi / lwIP), in both directions, with reconnection
-and clear link status.
+Move the loopback one more layer out: replace EPIC-02's **RP-local OUT→IN echo**
+with a **network round-trip to the orchestrator**. The RP sends OUT-ring bytes to
+the Python orchestrator (separate repo) and fills the IN ring from it; the
+orchestrator wires the MIDI Maze ring among players. Deliverable: **2-player
+MIDI Maze over IP**. The m68k hooks and shared-region rings are unchanged from
+EPIC-01/02 — only the RP's echo becomes a network exchange.
 
 ## Scope
 
-- In scope: connection lifecycle to a configured host:port, sending drained OUT
-  bytes, receiving bytes into the IN ring, and error/reconnect handling.
+- In scope: connection lifecycle to the orchestrator, draining the OUT ring to
+  the network, filling the IN ring from the network, reconnect/link status, and
+  validating real multiplayer.
 - Out of scope: where the config comes from (EPIC-04) and the ring mechanics
-  (EPIC-02). Wire framing/protocol choice is decided in STORY-01 here.
+  (EPIC-02). The wire format is already decided (raw bytes / TCP, D-02/D-03).
 
 ## Stories
 
-- STORY-01 — Connection lifecycle to configured host:port
-- STORY-02 — MIDI OUT bytes → network send
-- STORY-03 — Network receive → MIDI IN bytes
+- STORY-01 — Connection lifecycle to the orchestrator
+- STORY-02 — Drain the OUT ring → network send
+- STORY-03 — Network receive → fill the IN ring
 - STORY-04 — Error handling, reconnect, link status
-- STORY-05 — Extend the self-test harness over the network round-trip
+- STORY-05 — Validate: 2-player MIDI Maze over IP
 - STORY-06 — Endpoint liveness ping command
 
 ## Notes

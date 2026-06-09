@@ -20,6 +20,7 @@
 #include "ff.h"
 #include "gconfig.h"
 #include "memfunc.h"
+#include "midi.h"
 #include "network.h"
 #include "pico/stdlib.h"
 #include "reset.h"
@@ -346,6 +347,7 @@ void emul_start() {
   }
   chandler_init();
   chandler_addCB(term_command_cb);
+  midi_init();  // MIDI-to-IP: register the MIDI command handler
 
   // After this point, the remote computer can execute the code
 
