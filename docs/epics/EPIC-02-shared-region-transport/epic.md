@@ -1,7 +1,7 @@
 ---
 id: EPIC-02
 title: MIDI byte transport (m68k ↔ RP)
-status: todo
+status: done
 ---
 
 ## Goal
