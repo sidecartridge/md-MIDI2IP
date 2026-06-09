@@ -51,7 +51,8 @@ TRAP13_VECTOR        equ $B4         ; trap #13 handler address (read original)
 TRAP14_VECTOR        equ $B8         ; trap #14 (XBIOS) handler address (poke)
 
 ; --- BIOS function numbers (device in the next stack word) ---
-Bconout              equ 3           ; Bconout(dev, ch)
+Bconstat             equ 1           ; Bconstat(dev) — input status
+Bconout              equ 3           ; Bconout(dev, ch) — output
 MIDI_DEV             equ 3           ; BIOS device 3 = MIDI
 
 ; --- IOREC structure offsets (Atari input record) ---
@@ -191,14 +192,23 @@ midi_bios_trap:
     addq.w  #2, a0
 .mbt_notlong:
 
-    cmp.w   #Bconout, 6(a0)              ; Bconout?
-    bne.s   .mbt_chain
-    cmp.w   #MIDI_DEV, 8(a0)             ; device 3 (MIDI)?
+    ; MIDI console call? function 1..3 (Bconstat / Bconin / Bconout) AND
+    ; device 3. We service input on every device-3 call — not just Bconout —
+    ; because during gameplay the only m68k code that runs is these trap
+    ; handlers, so a read-wait loop (Bconstat with no preceding Bconout) must
+    ; pull pending bytes itself or it would hang.
+    cmp.w   #Bconstat, 6(a0)            ; function < 1?
+    blt.s   .mbt_chain
+    cmp.w   #Bconout, 6(a0)             ; function > 3?
+    bgt.s   .mbt_chain
+    cmp.w   #MIDI_DEV, 8(a0)            ; device 3 (MIDI)?
     bne.s   .mbt_chain
 
     movem.l d0-d7/a0-a6, -(sp)
 
-    ; --- ship the OUT byte to the RP (CMD_MIDI_SEND, d3 = byte) ---
+    ; --- Bconout: ship the OUT byte first (CMD_MIDI_SEND, d3 = byte) ---
+    cmp.w   #Bconout, 6(a0)
+    bne.s   .mbt_pull
     moveq   #0, d3
     move.b  11(a0), d3                  ; d3 = OUT byte (low byte)
     moveq   #4, d1                      ; payload: d3
@@ -206,13 +216,12 @@ midi_bios_trap:
     move.l  #send_sync_command_to_sidecart, a0
     jsr     (a0)
 
-    ; --- pull pending IN bytes from the RP (CMD_MIDI_RECV, no payload) ---
-    moveq   #0, d1
+.mbt_pull:
+    ; --- pull pending IN bytes from the RP and inject into Iorec ---
+    moveq   #0, d1                      ; CMD_MIDI_RECV: no payload
     move.w  #CMD_MIDI_RECV, d0
     move.l  #send_sync_command_to_sidecart, a0
     jsr     (a0)
-
-    ; --- inject MIDI_IN_COUNT bytes from MIDI_IN_BUFFER into Iorec ---
     move.l  MIDI_IN_COUNT_ADDR, d3      ; count the RP wrote
     beq.s   .mbt_no_in
     move.l  #MIDI_IN_BUFFER_ADDR, a3
