@@ -6,7 +6,9 @@ See also: `programming.md` (full shared-region table and budget rules), `README.
 
 ## What this repo is
 
-Template for a **Sidecartridge Multi-device microfirmware app** targeting Atari ST / STE / MegaST(E). Each "app" is a UF2 image that runs on a Raspberry Pi Pico (RP2040) plugged into the Multi-device cartridge slot, emulating a ROM cartridge for the Atari while also handling networking, SD card I/O, and config. Public build/usage docs are at <https://docs.sidecartridge.com/sidecartridge-multidevice/programming/>.
+**MIDI-to-IP** is a **Sidecartridge Multi-device microfirmware app** for Atari ST / STE / MegaST(E) that redirects all MIDI IN and OUT traffic from the Atari to a network endpoint, by hooking the BIOS and XBIOS calls. It ships as a UF2 image that runs on a Raspberry Pi Pico (RP2040) plugged into the Multi-device cartridge slot, emulating a ROM cartridge for the Atari while also handling networking, SD card I/O, and config. Public build/usage docs for the platform are at <https://docs.sidecartridge.com/sidecartridge-multidevice/programming/>.
+
+> Status: `v1.0.0alpha`. The MIDI hooking logic lives in `target/atarist/src/userfw.s` (the m68k user-firmware module) and the RP-side handler is registered via `chandler_addCB` in `emul.c`; the default `userfw.s` body is still the Cconws demo stub until the MIDI path is implemented.
 
 ## Build
 
@@ -70,8 +72,10 @@ See `programming.md` for the full table and budget rules.
 
 ### RP2040 side (`rp/src/`)
 - `main.c` — only sets clock/voltage, calls `gconfig_init` (global config) then `aconfig_init` (per-app config), and hands off to `emul_start()`. If config init fails it jumps to the **Booster** app via `reset_jump_to_booster()` to bootstrap. **Don't add features to `main.c`** — put them in `emul.c` or a new module.
-- `emul.c` / `emul.h` — the application's main loop and entry point. This is where to add new features.
+- `emul.c` / `emul.h` — the application's main loop and entry point. `emul_start()` initializes config/network/display, calls `commemul_init()` + `chandler_init()`, registers command callbacks, then spins the hot loop calling `chandler_loop()`. This is where to add new features.
+- `chandler.c` / `include/chandler.h` — **the primary RP-side extension point.** Command Handler for the SidecarTridge protocol: `chandler_loop()` polls the shared region for command words the m68k posted and dispatches each to a linked list of registered callbacks. Register your own with `chandler_addCB(cb)` (signature `void cb(TransmissionProtocol *protocol, uint16_t *payloadPtr)`; max `CHANDLER_MAX_CALLBACKS` = 16). `term_command_cb` is the default callback wired up in `emul_start()`. This file also owns the canonical region-layout constants (`CHANDLER_CARTRIDGE_CODE_SIZE`, shared-block offsets) that the m68k `main.s` mirrors.
 - `romemul.c` / `romemul.pio` — PIO programs and the runtime that emulates the cartridge ROM/RAM bus to the Atari (driven by `READ_*` / `WRITE_*` GPIOs defined in `include/constants.h`).
+- `commemul.c` / `commemul.pio` — ROM3 communication emulator backed by an aligned DMA ring buffer; feeds command/payload words from the Atari bus to `chandler`.
 - `gconfig.c` / `aconfig.c` — global vs per-app configuration stored in dedicated flash sectors, on top of `settings/` (a key-value store).
 - `network.c`, `httpc/`, `download.c` — Wi-Fi (CYW43, lwIP poll mode), HTTPS-capable HTTP client, firmware download support.
 - `sdcard.c`, `hw_config.c` — FatFs over SPI/SDIO via the bundled `fatfs-sdk`.
