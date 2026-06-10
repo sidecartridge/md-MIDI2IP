@@ -1,37 +1,55 @@
 ---
 id: EPIC-03
 title: RP network endpoint
-status: todo
+status: done
 ---
 
 ## Goal
 
-Move the loopback one more layer out: replace EPIC-02's **RP-local OUT→IN echo**
-with a **network round-trip to the orchestrator**. The RP sends OUT-ring bytes to
-the Python orchestrator (separate repo) and fills the IN ring from it; the
-orchestrator wires the MIDI Maze ring among players. Deliverable: **2-player
-MIDI Maze over IP**. The m68k hooks and shared-region rings are unchanged from
-EPIC-01/02 — only the RP's echo becomes a network exchange.
+Move the loopback one more layer out: replace EPIC-02's **RP-local echo** with a
+**network exchange to the orchestrator**. The change is entirely RP-side, at one
+seam in `rp/src/midi.c`:
+
+- `CMD_MIDI_SEND` — instead of `midi_in_push(byte)` (the local echo), **send the
+  byte to the orchestrator**.
+- a **network-receive** path — bytes arriving from the orchestrator do
+  `midi_in_push(byte)`, filling the same IN queue that `CMD_MIDI_RECV` already
+  drains into the shared buffer.
+
+The m68k side and the byte-pipe protocol (`CMD_MIDI_SEND`/`CMD_MIDI_RECV`,
+`MIDI_IN_*`) are unchanged. The RP becomes a TCP client to the orchestrator.
 
 ## Scope
 
-- In scope: connection lifecycle to the orchestrator, draining the OUT ring to
-  the network, filling the IN ring from the network, reconnect/link status, and
-  validating real multiplayer.
-- Out of scope: where the config comes from (EPIC-04) and the ring mechanics
-  (EPIC-02). The wire format is already decided (raw bytes / TCP, D-02/D-03).
+- In scope (RP side): the TCP connection lifecycle, sending OUT bytes, receiving
+  bytes into the IN queue, reconnect/link status, a liveness ping, and validating
+  the network round-trip.
+- Out of scope: the orchestrator's MIDI-Maze logic — it's a **separate repo**
+  (D-04/D-08), and it's what makes real gameplay possible (D-09). Config source
+  is EPIC-04; wire format is already decided (raw bytes / TCP, D-02/D-03).
+
+## Two validation levels (D-09)
+
+- **Network plumbing (in this epic):** with a trivial desktop **echo peer**, the
+  MIDI Maze handshake round-trips over the wire (master election + COUNT-PLAYERS +
+  config), exactly as EPIC-02 but networked. That's STORY-05 here.
+- **Gameplay (needs the orchestrator):** MIDI Maze won't start a match without a
+  real 2nd node (D-09). That requires the orchestrator to relay two STs or fake a
+  SLAVE — a separate-repo deliverable, not RP firmware. Tracked there + a final
+  integration, not as an EPIC-03 RP story.
 
 ## Stories
 
 - STORY-01 — Connection lifecycle to the orchestrator
-- STORY-02 — Drain the OUT ring → network send
-- STORY-03 — Network receive → fill the IN ring
+- STORY-02 — Send OUT bytes to the orchestrator (replace the echo)
+- STORY-03 — Network receive → the RP IN queue
 - STORY-04 — Error handling, reconnect, link status
-- STORY-05 — Validate: 2-player MIDI Maze over IP
+- STORY-05 — Validate the network round-trip (echo peer)
 - STORY-06 — Endpoint liveness ping command
+- STORY-07 — Remove unused HTTP/HTTPS/TLS plumbing
 
 ## Notes
 
-Use the existing `network.c` / lwIP poll-mode plumbing. Transport is decided: raw
-byte stream over TCP + `TCP_NODELAY` (D-02/D-03) to a central Python orchestrator
-(D-04/D-08), a separate project.
+Use the existing `network.c` / lwIP poll-mode plumbing. The RP is a TCP client to
+the orchestrator; raw byte stream over TCP + `TCP_NODELAY` (D-02/D-03). Keep the
+RP protocol-dumb — all MIDI-Maze awareness lives in the orchestrator.

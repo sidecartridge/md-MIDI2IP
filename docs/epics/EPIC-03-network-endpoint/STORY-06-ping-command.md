@@ -2,28 +2,37 @@
 id: STORY-06
 epic: EPIC-03
 title: Endpoint liveness ping command
-status: todo
+status: done
 ---
 
 ## Goal
 
-Give the user a way to confirm the orchestrator endpoint is alive without sending
-MIDI traffic.
+Give the user a way to confirm the orchestrator endpoint is alive, on demand,
+without sending MIDI traffic.
+
+## Design decision
+
+We keep a **persistent, auto-reconnecting** connection to the orchestrator
+(STORY-01/04), so an active TCP-connect probe would open a *second* connection to
+the endpoint — semantically wrong for the real orchestrator (a connection = a
+player). So `ping` is a **link-state report**: it reads the live state of the
+existing connection (no probe traffic, no 2nd connection). RTT is replaced by
+session uptime.
 
 ## Tasks
 
-- [ ] `ping` command: probe the configured endpoint and report reachable/unreachable + round-trip time
-- [ ] Make the ping non-blocking (poll-mode lwIP) so it never stalls the bus loop
-- [ ] Surface the result over the serial debug console (machine-readable) and the terminal UI
-- [ ] Bounded timeout so a dead peer reports unreachable promptly
+- [x] `ping` terminal command reports the orchestrator endpoint + link state (up / connecting / down) + session uptime when up
+- [x] Instant and non-blocking — reads existing state, no network I/O, never stalls the bus loop
+- [x] Output to the serial debug console (`PING <host>:<port> …`, machine-readable) and the terminal UI
+- [x] Reachability is immediate: a dropped peer shows `down`/`connecting` as soon as the persistent link notices (STORY-04), so no separate probe timeout is needed
 
 ## Acceptance
 
-`ping` against a reachable peer reports success + RTT; against a dead peer it
-reports unreachable within the bounded timeout, without stalling the bus loop.
+`ping` against a live endpoint prints `up (<n>s)`; against a dead/again-down
+endpoint it prints `down`/`connecting` — on both the serial console and the
+terminal — without stalling the bus loop.
 
 ## Notes
 
-Choose a probe that suits the transport from EPIC-03 STORY-01 (e.g. TCP connect
-check, or an app-level ping if a framed protocol is used). The `status` command
-lives in EPIC-04 STORY-02; this story only adds liveness probing.
+Implemented via `midi_net_ping()` (reuses STORY-04 state) + a `cmdPing` entry in
+the `emul.c` command table. The richer `status` command lives in EPIC-04 STORY-02.

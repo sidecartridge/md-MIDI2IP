@@ -51,6 +51,7 @@ static void cmdGet(const char *arg);
 static void cmdPutInt(const char *arg);
 static void cmdPutBool(const char *arg);
 static void cmdPutString(const char *arg);
+static void cmdPing(const char *arg);
 
 // Command table
 static const Command commands[] = {
@@ -69,6 +70,7 @@ static const Command commands[] = {
     {"put_int", cmdPutInt},
     {"put_bool", cmdPutBool},
     {"put_str", cmdPutString},
+    {"ping", cmdPing},
 };
 
 // Number of commands in the table
@@ -127,6 +129,18 @@ void cmdHelp(const char *arg) {
   term_printString("  exit    - Exit the terminal\n");
   term_printString("  f       - Launch user firmware on the Atari ST\n");
   term_printString("  help    - Show available commands\n");
+  term_printString("  ping    - Show orchestrator (MIDI-over-IP) link status\n");
+}
+
+void cmdPing(const char *arg) {
+  (void)arg;
+  menuScreenActive = false;
+  char line[96];
+  midi_net_ping(line, sizeof(line));
+  DPRINTF("PING %s\n", line);  // serial debug console, machine-readable
+  term_printString("orchestrator ");
+  term_printString(line);
+  term_printString("\n");
 }
 
 void cmdClear(const char *arg) {
@@ -478,6 +492,9 @@ void emul_start() {
 #else
     sleep_ms(SLEEP_LOOP_MS);
 #endif
+    // EPIC-03: drive the orchestrator TCP connection (no-op until Wi-Fi is up).
+    midi_net_poll();
+
     // Drain the ROM3 command ring → dispatch to registered callbacks.
     chandler_loop();
 
