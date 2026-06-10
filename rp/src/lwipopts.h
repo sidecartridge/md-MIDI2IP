@@ -128,7 +128,7 @@
 #define HTTPD_FSDATA_FILE "fsdata_srv.c"
 #endif
 
-// Only plain HTTP client: keep ALTCP/TLS disabled to save memory.
+// Raw TCP only (the MIDI client is a plain byte stream, D-02) — no ALTCP/TLS.
 #define LWIP_ALTCP 0
 #define MEMP_NUM_ALTCP_PCB 0
 #define LWIP_ALTCP_TLS 0

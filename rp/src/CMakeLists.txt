@@ -89,9 +89,6 @@ add_subdirectory(settings)
 # Add u8g2 library
 add_subdirectory(u8g2)
 
-# Add HTTP client library
-add_subdirectory(httpc)
-
 # Tell CMake where to find other source code
 add_subdirectory(${FATFS_SDK_PATH}/src build)
   
@@ -110,7 +107,6 @@ target_sources(${PROJECT_NAME} PRIVATE
         commemul.c
         display.c
         display_term.c
-        download.c
         emul.c
         gconfig.c
         hw_config.c
@@ -134,7 +130,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico                # FATFS library   
     pico_stdlib              # Core functionality
     pico_multicore          # Multicore support
-    httpc                    # HTTP client
     settings                 # Custom settings library
     u8g2                     # for display
 )
@@ -251,8 +246,6 @@ add_definitions(-DDISPLAY_ATARIST)
 # We don't modify the flash in Core 1
 add_definitions(-DPICO_FLASH_ASSUME_CORE0_SAFE=1)
 
-# Select HTTPS or HTTP downloads of the firmware
-add_definitions(-DAPP_DOWNLOAD_HTTPS=0)
 
 # Remove unused data
 target_link_options(${PROJECT_NAME} PRIVATE
