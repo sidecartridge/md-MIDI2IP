@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-08
 title: Ring protocol-state model (stateful, authoritative)
-status: todo
+status: in-progress
 milestone: alpha-mvp
 ---
 
@@ -16,10 +16,10 @@ interprets). This is the read-only foundation; STORY-02/03 act on it.
 
 ## Tasks
 
-- [ ] Per-player role (unknown / master / slave) + ring **phase** (electing / counting / name-dialog / in-game / terminated) tracked from the decoded stream
-- [ ] **Master detection**: the node whose `0x00` returns around the ring (and/or originates `0x80`/`0x84`); surface master + phase + last player-count in the HTTP status
-- [ ] **Reset on membership change** (join/leave) — the ring must re-stabilise before a game (D-04)
-- [ ] Unit-test the model from recorded byte sequences (election, count, start-game, terminate) — no hardware
+- [x] `RingState` tracks the ring **phase** (idle / electing / counting / name-dialog / in-game / terminated) + the **master** (others are slaves by implication) from the decoded stream
+- [x] **Master detection** (heuristic: first originator of a post-election control msg; STORY-02 makes it authoritative) — `master` / `phase` / `last_count` surfaced in `status.json` + the HTML status
+- [x] **Reset on membership change** (`add_player`/`remove_player` → `_reset_round`) — the ring must re-stabilise before a game (D-04)
+- [x] Unit-tested from recorded byte sequences (election → count → start-game → terminate → join-reset) in `selftest.py` Phase C — no hardware
 
 ## Acceptance
 

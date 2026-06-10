@@ -120,6 +120,83 @@ class MidiMazeInspector:
         return [f"JOYSTICK({_mm_joystick(b)})"] if self._in_game else [f"byte(0x{b:02x})"]
 
 
+class RingState:
+    """EPIC-08 STORY-01 — read-only ring-level view of the MIDI Maze protocol
+    (one global ring, D-04), inferred from the bytes the orchestrator relays.
+
+    Powers the HTTP status and is the foundation the STORY-02 election
+    coordinator will act on. **Observation only** — it never alters relayed
+    bytes (D-02). Master detection is a heuristic here (the first node to
+    originate a post-election control message); STORY-02 makes it authoritative.
+
+    Phases: idle / electing / counting / name-dialog / in-game / terminated."""
+
+    def __init__(self) -> None:
+        self._decoders: "dict[int, MidiMazeInspector]" = {}
+        self.phase = "idle"
+        self.master_id: "int | None" = None
+        self.last_count: "int | None" = None
+
+    def add_player(self, pid: int) -> None:
+        self._decoders[pid] = MidiMazeInspector()
+        self._reset_round()  # membership changed → ring must re-stabilise (D-04)
+
+    def remove_player(self, pid: int) -> None:
+        self._decoders.pop(pid, None)
+        self._reset_round()
+
+    def _reset_round(self) -> None:
+        self.phase = "electing" if self._decoders else "idle"
+        self.master_id = None
+        self.last_count = None
+
+    def feed(self, pid: int, data: bytes) -> "list[str]":
+        """Decode one player's OUT bytes, update the ring view, return events."""
+        decoder = self._decoders.get(pid)
+        if decoder is None:
+            return []
+        events = decoder.feed(data)
+        for event in events:
+            self._observe(pid, event)
+        return events
+
+    def _observe(self, pid: int, event: str) -> None:
+        if event == "MASTER-ELECT":
+            if self.phase in ("idle", "in-game", "terminated"):
+                self.phase = "electing"
+        elif event.startswith("COUNT-PLAYERS"):
+            self.phase = "counting"
+            if self.master_id is None:
+                self.master_id = pid  # first originator (heuristic; STORY-02 confirms)
+            try:
+                self.last_count = int(event.split("n=")[1].rstrip(")"))
+            except (IndexError, ValueError):
+                pass
+        elif event == "NAME-DIALOG":
+            self.phase = "name-dialog"
+            if self.master_id is None:
+                self.master_id = pid
+        elif event == "START-GAME":
+            if self.master_id is None:
+                self.master_id = pid
+            self.phase = "in-game"
+        elif event.startswith("SEND-DATA"):
+            self.phase = "in-game"
+        elif event == "TERMINATE-GAME":
+            self.phase = "terminated"
+
+    def snapshot(self) -> dict:
+        return {
+            "phase": self.phase,
+            "master": self.master_id,
+            "players": len(self._decoders),
+            "last_count": self.last_count,
+        }
+
+
+_ring = RingState()  # the single global ring's protocol state (D-04)
+
+
 def _should_dedup_ip(ip: str) -> bool:
     """Whether one-connection-per-IP applies to this peer.
 
@@ -254,8 +331,8 @@ async def handle_player(
         connected_at=asyncio.get_event_loop().time(),
     )
     registry.add(player)
+    _ring.add_player(player.id)
     LOG.info("player %d connected from %s (%d online)", player.id, peer, len(registry))
-    inspector = MidiMazeInspector() if _inspect else None
 
     try:
         while True:
@@ -266,8 +343,8 @@ async def handle_player(
             # Forward this player's OUT bytes to the next player's IN, verbatim
             # (D-02). Single source per target, so no interleaving.
             target = registry.next_player(player)
+            events = _ring.feed(player.id, data)  # update the ring view (read-only)
             if _inspect:
-                events = inspector.feed(data)
                 LOG.info("inspect p%d(%s) -> p%s: %s | %s", player.id, peer,
                          target.id if target else "-", data.hex(" "),
                          " ".join(events))
@@ -290,6 +367,7 @@ async def handle_player(
         LOG.exception("player %d (%s) handler crashed", player.id, peer)
     finally:
         registry.remove(player.id)
+        _ring.remove_player(player.id)
         writer.close()  # don't await wait_closed(): can hang under shutdown-cancel
         LOG.info(
             "player %d (%s) disconnected; %d bytes out / %d in (%d online)",
@@ -314,6 +392,7 @@ def _status_snapshot() -> dict:
         "listen": _listen_addr,
         "players_online": len(players),
         "ring": [p.id for p in players],  # ring order = insertion order, wraps
+        "protocol": _ring.snapshot(),  # EPIC-08: master / phase / last count (read-only)
         "players": [
             {
                 "id": p.id,
@@ -361,6 +440,7 @@ def _status_html() -> bytes:
         "<h1>MIDI-to-IP orchestrator</h1>"
         "<p>uptime {uptime_s}s &middot; game {listen} &middot; players online {players_online}</p>"
         "<p>ring: {ring}</p>"
+        "<p>protocol: phase <b>{phase}</b> &middot; master {master} &middot; last count {last_count}</p>"
         "<table><tr><th>id</th><th>peer</th><th>connected</th>"
         "<th>bytes out</th><th>bytes in</th></tr>{rows}</table>"
         "</body></html>"
@@ -369,6 +449,9 @@ def _status_html() -> bytes:
         listen=html.escape(s["listen"]),
         players_online=s["players_online"],
         ring=ring_str,
+        phase=html.escape(s["protocol"]["phase"]),
+        master=s["protocol"]["master"] if s["protocol"]["master"] is not None else "—",
+        last_count=s["protocol"]["last_count"] if s["protocol"]["last_count"] is not None else "—",
         rows=rows or "<tr><td colspan='5'>(no players)</td></tr>",
     )
     return page.encode("utf-8")

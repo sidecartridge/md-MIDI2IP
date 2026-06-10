@@ -131,11 +131,36 @@ def main() -> int:
     check("loopback -> no dedup (local testing)", orch._should_dedup_ip("127.0.0.1") is False)
     check("invalid -> no dedup", orch._should_dedup_ip("not-an-ip") is False)
 
+    # Phase C — EPIC-08 STORY-01 ring protocol-state model (no hardware): feed
+    # recorded MIDI Maze byte sequences and assert the inferred phase/master/count.
+    print("ring protocol-state model (EPIC-08 STORY-01):")
+    r = orch.RingState()
+    r.add_player(1)
+    r.add_player(2)
+    check("2 players -> electing", r.snapshot()["phase"] == "electing")
+    r.feed(1, b"\x00")
+    r.feed(2, b"\x00")
+    check("master election keeps electing", r.snapshot()["phase"] == "electing")
+    r.feed(1, b"\x80\x02")  # player 1 originates COUNT-PLAYERS(n=2)
+    snap = r.snapshot()
+    check("count -> counting", snap["phase"] == "counting")
+    check("count master = originator (p1)", snap["master"] == 1)
+    check("count value parsed (2)", snap["last_count"] == 2)
+    r.feed(1, b"\x84")  # START-GAME (master only)
+    check("start-game -> in-game", r.snapshot()["phase"] == "in-game")
+    r.feed(1, b"\x82")  # TERMINATE-GAME
+    check("terminate -> terminated", r.snapshot()["phase"] == "terminated")
+    r.add_player(3)  # membership change must reset the round (D-04)
+    reset = r.snapshot()
+    check("join resets phase to electing", reset["phase"] == "electing")
+    check("join clears master", reset["master"] is None)
+    check("join clears last count", reset["last_count"] is None)
+
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")
         return 1
-    print("PASS — orchestrator ring + IP-dedup validated")
+    print("PASS — orchestrator ring + IP-dedup + protocol-state model validated")
     return 0
 
 
