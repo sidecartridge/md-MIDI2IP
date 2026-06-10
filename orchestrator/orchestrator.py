@@ -9,7 +9,9 @@ Scope so far:
   - STORY-01: asyncio TCP server; a registry of players (id, peer, connect time,
     byte counters).
   - STORY-02: the **ring relay** — each player's OUT bytes are forwarded to the
-    next player's IN (insertion order, wrapping; a ring of one echoes to self).
+    next player's IN (insertion order, wrapping). A lone node has no peer and
+    gets nothing back (no self-echo), so it can't elect/count before the ring
+    forms (D-04).
   - STORY-03: a read-only **HTTP status** interface on a separate port (HTML page
     + `/status.json`), served in the same asyncio loop (race-free registry reads).
   - STORY-04: **robustness** — TCP keepalive (dead-player detection), bounded
@@ -38,6 +40,84 @@ LOG = logging.getLogger("orchestrator")
 _next_id = count(1)  # monotonic player ids
 _started_at = 0.0  # event-loop clock when serving began (for uptime)
 _listen_addr = ""  # "host:port" of the game TCP server, for display
+_inspect = False  # --inspect: decode the MIDI Maze protocol as traffic passes
+
+
+# --- MIDI Maze protocol inspection (in-line, read-only) --------------------
+# When --inspect is on, each player's MIDI-OUT stream is decoded into protocol
+# events as it is relayed, so the log shows COUNT-PLAYERS / START-GAME / JOYSTICK
+# etc. instead of raw hex. From Markus Fritze's protocol (thesis 2.4.2 / Anexo A):
+# a SLAVE re-sends every message it receives; the MASTER expects its message back.
+_MM_MASTER_ELECT = 0x00
+_MM_COUNT_PLAYERS = 0x80  # 0x80 <n>: master sends 0x80 0x00; each slave inc's <n>
+_MM_RESET_SCORE = 0x81
+_MM_TERMINATE_GAME = 0x82
+_MM_SEND_DATA = 0x83  # name\0 + maze-size + speeds + lives + 3 drones + 4096 maze + …
+_MM_START_GAME = 0x84
+_MM_ABOUT = 0x85
+_MM_NAME_DIALOG = 0x86
+# SEND-DATA fixed tail after the 0-terminated name: maze-size(1)+recharge(1)+
+# regen(1)+reappear(1)+lives(1)+drones(3)+maze(4096)+teams-flag(1)+teams(16)+
+# friendly-fire(1)+seed(2).
+_MM_SEND_DATA_FIXED = 1 + 1 + 1 + 1 + 1 + 3 + 4096 + 1 + 16 + 1 + 2  # 4123
+
+
+def _mm_joystick(b: int) -> str:
+    names = [n for n, m in (("L", 1), ("R", 2), ("D", 4), ("U", 8), ("Fire", 16)) if b & m]
+    return "+".join(names) if names else "none"
+
+
+class MidiMazeInspector:
+    """Stateful per-player decoder: feed() OUT bytes, get protocol-event labels.
+    Best-effort (not fully phase-aware) — enough to read the setup handshake
+    where master election and COUNT-PLAYERS live."""
+
+    def __init__(self) -> None:
+        self._state = "normal"
+        self._fixed_left = 0
+        self._in_game = False
+
+    def feed(self, data: bytes) -> "list[str]":
+        events: "list[str]" = []
+        for b in data:
+            events.extend(self._byte(b))
+        return events
+
+    def _byte(self, b: int) -> "list[str]":
+        if self._state == "expect_count":  # the byte after 0x80 is the count
+            self._state = "normal"
+            return [f"COUNT-PLAYERS(n={b})"]
+        if self._state == "send_data_name":  # consume the 0-terminated name
+            if b == 0x00:
+                self._state = "send_data_fixed"
+                self._fixed_left = _MM_SEND_DATA_FIXED
+            return []
+        if self._state == "send_data_fixed":  # consume the fixed game-data tail
+            self._fixed_left -= 1
+            if self._fixed_left <= 0:
+                self._state = "normal"
+                self._in_game = True
+                return ["SEND-DATA(end)"]
+            return []
+        if b == _MM_COUNT_PLAYERS:
+            self._state = "expect_count"
+            return []
+        if b == _MM_RESET_SCORE:
+            return ["RESET-SCORE"]
+        if b == _MM_TERMINATE_GAME:
+            return ["TERMINATE-GAME"]
+        if b == _MM_SEND_DATA:
+            self._state = "send_data_name"
+            return ["SEND-DATA(start)"]
+        if b == _MM_START_GAME:
+            return ["START-GAME"]
+        if b == _MM_ABOUT:
+            return ["ABOUT"]
+        if b == _MM_NAME_DIALOG:
+            return ["NAME-DIALOG"]
+        if b == _MM_MASTER_ELECT:
+            return [f"JOYSTICK({_mm_joystick(b)})"] if self._in_game else ["MASTER-ELECT"]
+        return [f"JOYSTICK({_mm_joystick(b)})"] if self._in_game else [f"byte(0x{b:02x})"]
 
 
 def _should_dedup_ip(ip: str) -> bool:
@@ -104,16 +184,15 @@ class Registry:
         return list(self._players.values())
 
     def next_player(self, player: Player) -> "Player | None":
-        """The player after `player` in the ring (insertion order, wrapping).
-
-        Ring of one -> the player itself (self-loop / echo, the faithful
-        ring-of-one). Returns None if `player` is no longer connected. Computed
-        fresh each call so the ring re-forms on every join/leave."""
+        """The player after `player` in the ring (insertion order, wrapping), or
+        None if `player` has no ring peer — either it's gone, or it's the **only**
+        one connected. We must NOT echo a lone player to itself: that would let it
+        win master election and run the player-count before a second node joins
+        (D-04, "ring membership fixed before a game starts"). A lone node gets
+        nothing back and waits. Computed fresh each call (re-forms on join/leave)."""
         ids = list(self._players)
-        if player.id not in self._players:
+        if player.id not in self._players or len(ids) == 1:
             return None
-        if len(ids) == 1:
-            return player  # ring of one: echo back to self
         nxt = ids[(ids.index(player.id) + 1) % len(ids)]
         return self._players[nxt]
 
@@ -176,6 +255,7 @@ async def handle_player(
     )
     registry.add(player)
     LOG.info("player %d connected from %s (%d online)", player.id, peer, len(registry))
+    inspector = MidiMazeInspector() if _inspect else None
 
     try:
         while True:
@@ -186,17 +266,19 @@ async def handle_player(
             # Forward this player's OUT bytes to the next player's IN, verbatim
             # (D-02). Single source per target, so no interleaving.
             target = registry.next_player(player)
+            if _inspect:
+                events = inspector.feed(data)
+                LOG.info("inspect p%d(%s) -> p%s: %s | %s", player.id, peer,
+                         target.id if target else "-", data.hex(" "),
+                         " ".join(events))
             if target is None:
-                continue
+                continue  # no ring peer yet (lone node) — drop, don't self-echo
             try:
                 target.writer.write(data)
-                if target is player:
-                    await target.writer.drain()  # ring of one: echo to self
-                else:
-                    # Bound the wait so one stuck player can't freeze the ring.
-                    await asyncio.wait_for(
-                        target.writer.drain(), timeout=SLOW_PLAYER_TIMEOUT_S
-                    )
+                # Bound the wait so one stuck player can't freeze the ring.
+                await asyncio.wait_for(
+                    target.writer.drain(), timeout=SLOW_PLAYER_TIMEOUT_S
+                )
                 target.bytes_in += len(data)
             except asyncio.TimeoutError:
                 _drop_player(target, "too slow (write backpressure)")
@@ -384,7 +466,13 @@ def main() -> None:
     parser.add_argument(
         "--http-port", type=int, default=8080, help="HTTP status port (default: 8080)"
     )
+    parser.add_argument(
+        "--inspect", action="store_true",
+        help="decode + log the MIDI Maze protocol as traffic passes (read-only)",
+    )
     args = parser.parse_args()
+    global _inspect
+    _inspect = args.inspect
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
