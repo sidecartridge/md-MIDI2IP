@@ -17,12 +17,12 @@ it reaches the orchestrator with low added latency.
 - [x] On `CMD_MIDI_SEND`, `tcp_write` the byte to the socket (was the IN-queue echo) via `midi_net_send_byte`
 - [x] Forward bytes verbatim — no MIDI parsing/filtering/framing (D-02)
 - [x] Flush immediately with `tcp_output` (TCP_NODELAY) for lowest latency (C-01)
-- [x] Send-failure handling decided: drop on a full TCP buffer (sufficient at handshake rate); gameplay-rate queue+retry on `tcp_sent` is out of scope here, tracked in EPIC-05 (throughput tuning)
+- [x] Send-failure handling decided: drop on a full TCP buffer (sufficient at handshake rate); gameplay-rate queue+retry on `tcp_sent` is out of scope here, tracked in EPIC-07 (throughput tuning)
 
 ## Acceptance
 
 Bytes the ST emits via `Bconout(3)` appear at the orchestrator (or echo peer) in
-order; measured added latency is within target (set in EPIC-05).
+order; measured added latency is within target (set in EPIC-07).
 
 **Verified on hardware:** with `tools/echo_peer.py`, the peer prints the MIDI
 Maze bytes (`00`, `80`, `01`, …) in order, and the ST becomes MASTER via the

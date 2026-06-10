@@ -66,32 +66,39 @@ defers or settles a cross-cutting choice.
 
 [`ORCHESTRATOR-CONTRACT.md`](ORCHESTRATOR-CONTRACT.md) specifies the wire format
 and ring semantics between the firmware and the network orchestrator. The
-orchestrator is built in its own repo; this contract is the shared interface we
-iterate on here so EPIC-03 has a stable target.
+orchestrator lives in this repo (`orchestrator/`, EPIC-04, Python 3 stdlib-only);
+this contract is the shared interface between the firmware (EPIC-03) and the
+server (EPIC-04).
 
 ## Roadmap & sequencing
 
 **Linear flow:** each epic is fully completable before the next begins. The
 working loopback moves outward one layer at a time — the observable result (solo
-MIDI Maze becomes MASTER and plays) holds at every step until EPIC-03 adds real
-multiplayer:
+MIDI Maze becomes MASTER) holds at each step; real multiplayer arrives once the
+orchestrator (EPIC-04) and a 2nd player (EPIC-05) exist:
 
 ```
 EPIC-01  hook + LOCAL loopback     (all m68k; echo in the Atari)
-   │  done — solo MIDI Maze plays
+   │  done — solo MIDI Maze becomes MASTER
    ▼
-EPIC-02  ring transport            (echo moves to the RP via shared-region rings)
-   │  same solo game, data now crosses to the RP
+EPIC-02  RP byte transport         (echo moves to the RP via the byte pipe)
+   │  done — same handshake, data now crosses to the RP
    ▼
-EPIC-03  network                   (echo becomes a round-trip to the orchestrator)
-      multiplayer over IP
+EPIC-03  RP network endpoint       (echo becomes a round-trip to the network)
+   │  done — MIDI over IP, validated with an echo peer
+   ▼
+EPIC-04  orchestrator server       (wires players into a ring; in-repo, Python stdlib)
+   │
+   ▼
+EPIC-05  Hatari gateway            (software RP2040 → a virtual player; FIRST real match)
 
-EPIC-04 config/UI/cleanup  and  EPIC-05 validation span the others.
+EPIC-06 config/UI/cleanup  and  EPIC-07 validation span the others.
 ```
 
-Build order: EPIC-01 → EPIC-02 → EPIC-03, one at a time. EPIC-04 STORY-01 (config)
-is needed once the endpoint must be configurable; STORY-03 (trim) runs **last**.
-EPIC-05 STORY-02 (latency tuning) follows a working path.
+Build order: EPIC-01 → EPIC-02 → EPIC-03 → EPIC-04 → EPIC-05 — the first playable
+match lands at EPIC-05 (a Hatari player gives the 2nd node, D-09). EPIC-06
+STORY-01 (config) is needed once the endpoint must be configurable; STORY-03
+(trim) runs **last**. EPIC-07 STORY-01 (latency tuning) follows a working path.
 
 ### Alpha MVP — MIDI Maze over IP
 

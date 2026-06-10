@@ -1,6 +1,6 @@
 ---
-id: STORY-02
-epic: EPIC-05
+id: STORY-01
+epic: EPIC-07
 title: Latency/throughput measurement & tuning
 status: todo
 ---

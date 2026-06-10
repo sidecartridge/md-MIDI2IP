@@ -1,5 +1,5 @@
 ---
-id: EPIC-04
+id: EPIC-06
 title: Configuration, UI & template cleanup
 status: todo
 ---

@@ -35,4 +35,4 @@ terminal — without stalling the bus loop.
 ## Notes
 
 Implemented via `midi_net_ping()` (reuses STORY-04 state) + a `cmdPing` entry in
-the `emul.c` command table. The richer `status` command lives in EPIC-04 STORY-02.
+the `emul.c` command table. The richer `status` command lives in EPIC-06 STORY-02.

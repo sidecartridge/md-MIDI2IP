@@ -1,11 +1,10 @@
 # Orchestrator ring-router contract
 
-The orchestrator is a **separate project, developed in its own repository** (a
-Python `asyncio` server — D-03/D-08). It is **not built in this repo.** This
-document is the shared *contract* between the two sides: the wire format and the
-ring semantics the firmware depends on. We keep it here so the firmware work
-(EPIC-03) can proceed against a stable interface; the orchestrator team
-implements its half from the same contract.
+The orchestrator is a Python `asyncio` server (D-03/D-08) built **in this repo**
+under `orchestrator/` (**EPIC-04**, Python 3 stdlib only — revises the earlier
+"separate repo" plan, D-04/D-10). This document is the shared *contract* between
+the two sides: the wire format and the ring semantics the firmware (EPIC-03)
+depends on and the server (EPIC-04) implements.
 
 It captures decisions D-02 (raw bytes), D-03 (TCP), D-04 (ring topology),
 D-08 (raw sockets, no host MIDI), and constraint C-01 (lock-step latency).
@@ -60,7 +59,7 @@ MIDI-IN readback, and frame rate is bounded by ring-speed. Therefore:
   latency** — no batching that adds delay beyond a few ms.
 - Per-hop turnaround should match or beat the original physical ring
   (~hundreds of µs/hop at 31250 baud); we have headroom because the firmware
-  intercepts before the ACIA (EPIC-05 STORY-02).
+  intercepts before the ACIA (EPIC-07 STORY-01).
 - The orchestrator must never stall one player's IN waiting on unrelated work.
 
 ## Responsibilities

@@ -1,6 +1,6 @@
 ---
 id: STORY-02
-epic: EPIC-04
+epic: EPIC-06
 title: Status command and config editing (terminal + serial)
 status: todo
 ---
@@ -23,7 +23,7 @@ settings.
 
 `status` shows live counters that move when MIDI flows and reflects the real
 connection state; the serial form is parseable; edits take effect and persist
-(via EPIC-04 STORY-01).
+(via EPIC-06 STORY-01).
 
 ## Notes
 

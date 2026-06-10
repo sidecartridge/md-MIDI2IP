@@ -1,6 +1,6 @@
 ---
 id: STORY-01
-epic: EPIC-04
+epic: EPIC-06
 title: Per-app config keys for the MIDI endpoint
 status: todo
 milestone: alpha-mvp

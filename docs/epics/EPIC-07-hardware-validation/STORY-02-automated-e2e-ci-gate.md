@@ -1,6 +1,6 @@
 ---
-id: STORY-03
-epic: EPIC-05
+id: STORY-02
+epic: EPIC-07
 title: Automated regression gate (self-test over the full stack)
 status: todo
 milestone: alpha-mvp
@@ -17,7 +17,7 @@ so regressions are caught without a human reading the ST screen.
 
 - [ ] Cartridge-resident self-test exerciser (gated to a test build): drive a deterministic MIDI pattern through the hooks and check the bytes that come back
 - [ ] Verdict channel: write pass/fail + counters to a shared-region slot; the RP prints `MIDI-SELFTEST: PASS|FAIL n/m` over serial
-- [ ] Run it over the full path (ST → rings → RP → network → test peer → back) using the EPIC-05 STORY-01 peer
+- [ ] Run it over the full path (ST → RP → network → orchestrator → back) using the EPIC-05 Hatari gateway (and/or a 2nd ST) as the peer
 - [ ] One command: build the test build, reset the ST, capture serial, assert PASS; document how to triage a FAIL (which layer's counters)
 
 ## Acceptance

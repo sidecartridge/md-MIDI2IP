@@ -1,6 +1,6 @@
 ---
 id: STORY-03
-epic: EPIC-04
+epic: EPIC-06
 title: Trim the microfirmware template of unused code
 status: todo
 ---

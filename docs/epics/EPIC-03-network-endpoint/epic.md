@@ -24,9 +24,9 @@ The m68k side and the byte-pipe protocol (`CMD_MIDI_SEND`/`CMD_MIDI_RECV`,
 - In scope (RP side): the TCP connection lifecycle, sending OUT bytes, receiving
   bytes into the IN queue, reconnect/link status, a liveness ping, and validating
   the network round-trip.
-- Out of scope: the orchestrator's MIDI-Maze logic — it's a **separate repo**
-  (D-04/D-08), and it's what makes real gameplay possible (D-09). Config source
-  is EPIC-04; wire format is already decided (raw bytes / TCP, D-02/D-03).
+- Out of scope: the **orchestrator** (EPIC-04, in this repo) — it wires the ring
+  and is what makes real gameplay possible (D-09). Config source is EPIC-06; wire
+  format is already decided (raw bytes / TCP, D-02/D-03).
 
 ## Two validation levels (D-09)
 
@@ -34,9 +34,9 @@ The m68k side and the byte-pipe protocol (`CMD_MIDI_SEND`/`CMD_MIDI_RECV`,
   MIDI Maze handshake round-trips over the wire (master election + COUNT-PLAYERS +
   config), exactly as EPIC-02 but networked. That's STORY-05 here.
 - **Gameplay (needs the orchestrator):** MIDI Maze won't start a match without a
-  real 2nd node (D-09). That requires the orchestrator to relay two STs or fake a
-  SLAVE — a separate-repo deliverable, not RP firmware. Tracked there + a final
-  integration, not as an EPIC-03 RP story.
+  real 2nd node (D-09). That requires the orchestrator (EPIC-04) to wire a ring,
+  with the 2nd node a 2nd ST or a Hatari gateway player (EPIC-05) — not RP
+  firmware. Tracked in those epics, not as an EPIC-03 RP story.
 
 ## Stories
 

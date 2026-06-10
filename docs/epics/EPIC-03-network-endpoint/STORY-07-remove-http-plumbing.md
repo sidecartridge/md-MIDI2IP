@@ -35,6 +35,6 @@ no mbedTLS dependency in the build graph, faster compile.
 ## Notes
 
 D-02 (raw bytes, no protocol/TLS layer) is why none of this is needed.
-Complements EPIC-04's general template-cleanup story — this is the
+Complements EPIC-06's general template-cleanup story — this is the
 network-specific slice. The MIDI path was untouched, so MIDI-over-IP behaviour is
 unchanged (flash to re-confirm). Firmware self-download lives in the Booster app.
