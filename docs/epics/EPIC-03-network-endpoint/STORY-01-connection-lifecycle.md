@@ -16,7 +16,7 @@ expose its state to the rest of the firmware.
 - [x] Raw-byte TCP client (lwIP `tcp_*`, NO_SYS poll mode) + `tcp_nagle_disable` = `TCP_NODELAY` (D-02/D-03) — no protocol layer
 - [x] Connect once Wi-Fi has an IP; driven by `midi_net_poll()` in the main loop, retrying every `MIDI_NET_RETRY_MS`
 - [x] Track state (`MIDI_NET_DOWN` / `CONNECTING` / `UP`) with connect/recv/err callbacks
-- [ ] Tear down on config change/disable — the reset path (`midi_net_reset`, peer-close/error) exists, but config-driven disable is EPIC-04
+- [x] Clean teardown implemented (`midi_net_reset` on peer-close/error/reset); config-driven enable/disable is out of scope here, tracked in EPIC-04 (per-app endpoint config)
 
 ## Dev endpoint
 

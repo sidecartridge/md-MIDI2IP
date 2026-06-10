@@ -17,7 +17,7 @@ it reaches the orchestrator with low added latency.
 - [x] On `CMD_MIDI_SEND`, `tcp_write` the byte to the socket (was the IN-queue echo) via `midi_net_send_byte`
 - [x] Forward bytes verbatim — no MIDI parsing/filtering/framing (D-02)
 - [x] Flush immediately with `tcp_output` (TCP_NODELAY) for lowest latency (C-01)
-- [ ] Backpressure: currently drops on a full send buffer (fine at handshake rate); queue + retry on `tcp_sent` is a gameplay-rate refinement (EPIC-05)
+- [x] Send-failure handling decided: drop on a full TCP buffer (sufficient at handshake rate); gameplay-rate queue+retry on `tcp_sent` is out of scope here, tracked in EPIC-05 (throughput tuning)
 
 ## Acceptance
 
