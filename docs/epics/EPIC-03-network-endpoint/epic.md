@@ -1,7 +1,7 @@
 ---
 id: EPIC-03
 title: RP network endpoint
-status: todo
+status: done
 ---
 
 ## Goal
