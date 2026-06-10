@@ -53,7 +53,7 @@ static inline void __not_in_flash_func(midi_in_push)(uint8_t b) {
 // DEV: set MIDI_NET_HOST to the machine running the echo peer (see the EPIC-03
 // STORY-05 echo server). The RP is a raw-TCP client (lwIP NO_SYS poll mode), so
 // everything below runs from the main loop / lwIP poll context — no locking.
-#define MIDI_NET_HOST "192.168.1.41"  // DEV: laptop running tools/echo_peer.py
+#define MIDI_NET_HOST "0.0.0.0"  // placeholder — set to the orchestrator's IP for dev; EPIC-04 makes it configurable
 #define MIDI_NET_PORT 5005
 #define MIDI_NET_BACKOFF_MIN_MS 500   // first reconnect delay
 #define MIDI_NET_BACKOFF_MAX_MS 8000  // backoff cap
