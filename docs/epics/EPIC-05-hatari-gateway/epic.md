@@ -27,12 +27,14 @@ and a single real ST can finally get a second node to start a match (D-09).
 
 ## Hatari file mechanism
 
-Hatari's flags are counter-intuitively named:
-- `--midi-in <file>` — Hatari **writes** the Atari's MIDI **OUT** here (Atari → host).
-- `--midi-out <file>` — Hatari **reads** the Atari's MIDI **IN** from here (host → Atari).
+The `--midi-in` / `--midi-out` file flags enable MIDI on their own (no separate
+`--midi` flag in Hatari 2.6.1):
+- `--midi-out <file>` — Hatari **writes** the Atari's MIDI **OUT** here (Atari → host).
+- `--midi-in <file>` — Hatari **reads** the Atari's MIDI **IN** from here (host → Atari).
 
 For real-time we use two **named pipes (FIFOs)**: the gateway reads the OUT fifo
-and writes the IN fifo continuously.
+(`midi_out.fifo`, Hatari's `--midi-out`) and writes the IN fifo (`midi_in.fifo`,
+Hatari's `--midi-in`) continuously.
 
 ## Stories
 

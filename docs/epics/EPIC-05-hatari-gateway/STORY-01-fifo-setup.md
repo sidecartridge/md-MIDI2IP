@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-05
 title: FIFO setup + documented Hatari invocation
-status: todo
+status: in-progress
 milestone: alpha-mvp
 ---
 
@@ -13,10 +13,10 @@ how to launch Hatari against them. Stdlib only (`os.mkfifo`).
 
 ## Tasks
 
-- [ ] Create two FIFOs (e.g. `midi_out.fifo` = Atari OUT, `midi_in.fifo` = Atari IN) via `os.mkfifo`, idempotently
-- [ ] Document the Hatari command: `--midi-in <midi_out.fifo>` (Hatari writes Atari-OUT) and `--midi-out <midi_in.fifo>` (Hatari reads Atari-IN) — note the backwards naming
-- [ ] Handle the FIFO open/blocking semantics (open order, non-blocking vs blocking) so neither side deadlocks at startup
-- [ ] Clean up FIFOs on exit; tolerate Hatari starting before/after the gateway
+- [x] `create_fifos()` makes `midi_out.fifo` (Atari OUT) + `midi_in.fifo` (Atari IN) via `os.mkfifo`, idempotently
+- [x] `hatari_command()` prints the invocation: `--midi-out <midi_out.fifo>` (Hatari writes Atari-OUT) + `--midi-in <midi_in.fifo>` (Hatari reads Atari-IN) — these enable MIDI on their own (no `--midi` flag)
+- [x] `open_fifos()` opens non-blocking (OUT read immediate; IN write retries on ENXIO until Hatari's reader) — no deadlock at startup
+- [x] `remove_fifos()` cleans up on exit; open tolerates Hatari starting before or after the gateway (both validated by `selftest.py`)
 
 ## Acceptance
 
