@@ -15,6 +15,8 @@
 
 #include "midi.h"
 
+#include <stdio.h>  // snprintf
+
 #include "blink.h"
 #include "chandler.h"
 #include "constants.h"  // __rom_in_ram_start__
@@ -68,6 +70,7 @@ static absolute_time_t midiNetNextAttempt;
 static bool midiNetNextAttemptValid = false;
 static uint32_t midiNetBackoffMs = MIDI_NET_BACKOFF_MIN_MS;
 static bool midiNetLedSteady = false;  // LED currently held steady-on (link up)
+static absolute_time_t midiNetUpSince;  // when the current UP session connected
 
 // Discard pending IN bytes. On a link drop they're stale, and the m68k must not
 // inject them after a reconnect (STORY-04 defined reset behaviour). Single
@@ -133,6 +136,7 @@ static err_t midi_net_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err) {
   }
   midiNetState = MIDI_NET_UP;
   midiNetBackoffMs = MIDI_NET_BACKOFF_MIN_MS;  // reset backoff on success
+  midiNetUpSince = get_absolute_time();
   DPRINTF("MIDI net: connected to %s:%d\n", MIDI_NET_HOST, MIDI_NET_PORT);
   return ERR_OK;
 }
@@ -220,6 +224,22 @@ const char *midi_net_status_str(void) {
       return "connecting";
     default:
       return "down";
+  }
+}
+
+// STORY-06: format a one-line orchestrator liveness report — endpoint, link
+// state, and (when up) how long the session has been connected. Reuses the
+// persistent connection; no extra probe traffic.
+void midi_net_ping(char *buf, size_t len) {
+  if (midiNetState == MIDI_NET_UP) {
+    uint32_t up_s = (uint32_t)(absolute_time_diff_us(midiNetUpSince,
+                                                     get_absolute_time()) /
+                               1000000);
+    snprintf(buf, len, "%s:%d up (%lus)", MIDI_NET_HOST, MIDI_NET_PORT,
+             (unsigned long)up_s);
+  } else {
+    snprintf(buf, len, "%s:%d %s", MIDI_NET_HOST, MIDI_NET_PORT,
+             midi_net_status_str());
   }
 }
 

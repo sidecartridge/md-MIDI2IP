@@ -9,6 +9,8 @@
 #ifndef MIDI_H
 #define MIDI_H
 
+#include <stddef.h>  // size_t
+
 #include "chandler.h"  // CHANDLER_APP_FREE_OFFSET
 
 // App command namespace for MIDI-to-IP. The high byte selects the app; the
@@ -47,5 +49,9 @@ void midi_net_poll(void);
 
 // EPIC-03 STORY-04: orchestrator link state for display ("up"/"connecting"/"down").
 const char *midi_net_status_str(void);
+
+// EPIC-03 STORY-06: format a one-line orchestrator liveness report into buf
+// (endpoint, link state, and uptime when connected).
+void midi_net_ping(char *buf, size_t len);
 
 #endif  // MIDI_H
