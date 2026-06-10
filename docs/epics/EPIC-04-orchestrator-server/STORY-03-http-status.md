@@ -2,7 +2,7 @@
 id: STORY-03
 epic: EPIC-04
 title: HTTP status interface
-status: in-progress
+status: done
 milestone: alpha-mvp
 ---
 

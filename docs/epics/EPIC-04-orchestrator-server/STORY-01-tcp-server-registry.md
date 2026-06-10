@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-04
 title: asyncio TCP server + connection registry
-status: in-progress
+status: done
 milestone: alpha-mvp
 ---
 

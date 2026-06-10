@@ -1,7 +1,7 @@
 ---
 id: EPIC-04
 title: Orchestrator server
-status: todo
+status: done
 ---
 
 ## Goal

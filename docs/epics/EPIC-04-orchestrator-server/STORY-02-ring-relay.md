@@ -2,7 +2,7 @@
 id: STORY-02
 epic: EPIC-04
 title: Ring relay (single global ring)
-status: in-progress
+status: done
 milestone: alpha-mvp
 ---
 

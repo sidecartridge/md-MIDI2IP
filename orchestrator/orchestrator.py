@@ -14,6 +14,8 @@ Scope so far:
     + `/status.json`), served in the same asyncio loop (race-free registry reads).
   - STORY-04: **robustness** — TCP keepalive (dead-player detection), bounded
     write buffers, slow-player drop (a stuck node can't freeze the ring),
+    one-connection-per-**private**-IP (a reconnect supersedes a node's stale
+    half-open connection; public/NAT gateways and loopback are exempt),
     defensive per-connection error handling, and clean Ctrl-C shutdown.
 
 Usage:  python3 orchestrator/orchestrator.py [--host H] [--port P]
@@ -23,6 +25,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import html
+import ipaddress
 import json
 import logging
 import signal
@@ -35,6 +38,20 @@ LOG = logging.getLogger("orchestrator")
 _next_id = count(1)  # monotonic player ids
 _started_at = 0.0  # event-loop clock when serving began (for uptime)
 _listen_addr = ""  # "host:port" of the game TCP server, for display
+
+
+def _should_dedup_ip(ip: str) -> bool:
+    """Whether one-connection-per-IP applies to this peer.
+
+    Only **private-network** addresses (RFC 1918 / link-local) — a LAN node = one
+    IP, so a reconnect must supersede its stale connection. NOT public addresses
+    (a NAT gateway legitimately hides many players behind one IP) and NOT loopback
+    (so local multi-client testing / two emulators on one host can coexist)."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return addr.is_private and not addr.is_loopback
 
 # A player whose IN can't be written for this long (TCP backpressure) is treated
 # as stuck and dropped, so one slow node can't freeze the lock-step ring.
@@ -63,6 +80,7 @@ class Player:
 
     id: int
     peer: str  # "ip:port"
+    ip: str  # peer host only — node identity for one-connection-per-IP dedup
     writer: asyncio.StreamWriter  # used by STORY-02 to push this player's IN bytes
     connected_at: float  # event-loop clock (seconds); for uptime
     bytes_out: int = 0  # bytes received FROM the player (their MIDI OUT)
@@ -138,9 +156,21 @@ async def handle_player(
 
     peername = writer.get_extra_info("peername")
     peer = f"{peername[0]}:{peername[1]}" if peername else "?"
+    ip = peername[0] if peername else "?"
+
+    # One connection per private IP (a LAN node = one IP). A reconnecting node
+    # whose old, half-open connection hasn't been detected yet would otherwise
+    # show up as a phantom extra player — so supersede any existing connection
+    # from this IP. Public IPs (NAT gateways) and loopback are exempt.
+    if _should_dedup_ip(ip):
+        for existing in registry.players():
+            if existing.ip == ip:
+                _drop_player(existing, f"superseded by new connection from {ip}")
+
     player = Player(
         id=next(_next_id),
         peer=peer,
+        ip=ip,
         writer=writer,
         connected_at=asyncio.get_event_loop().time(),
     )
