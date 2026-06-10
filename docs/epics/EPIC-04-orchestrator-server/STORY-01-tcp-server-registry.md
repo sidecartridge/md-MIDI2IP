@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-04
 title: asyncio TCP server + connection registry
-status: todo
+status: done
 milestone: alpha-mvp
 ---
 
@@ -13,10 +13,10 @@ connections and tracks them in an in-memory registry. Stdlib only.
 
 ## Tasks
 
-- [ ] `asyncio` TCP server bound to a configurable host:port (default `0.0.0.0:5005`)
-- [ ] On connect, register the player: id, peer address, connect time, OUT/IN byte counters
-- [ ] On disconnect, deregister; expose the registry to the ring relay (STORY-02) and HTTP (STORY-03)
-- [ ] `TCP_NODELAY` on each accepted socket (latency, C-01); structured logging of connect/disconnect
+- [x] `asyncio` TCP server (`asyncio.start_server`) bound to a configurable host:port (`--host`/`--port`, default `0.0.0.0:5005`)
+- [x] On connect, register the `Player` (id, peer, connect time, `bytes_out`/`bytes_in`); reads + counts incoming bytes (discarded until STORY-02)
+- [x] On disconnect, deregister; the shared `registry` is exposed for the ring relay (STORY-02) and HTTP (STORY-03)
+- [x] `TCP_NODELAY` on each accepted socket; structured `logging` of connect/disconnect with counters + online count
 
 ## Acceptance
 

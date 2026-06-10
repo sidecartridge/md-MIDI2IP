@@ -23,16 +23,17 @@
 #include "debug.h"
 #include "lwip/ip_addr.h"
 #include "lwip/tcp.h"
-#include "memfunc.h"    // WRITE_AND_SWAP_LONGWORD
-#include "network.h"    // network_getCurrentIp
+#include "memfunc.h"  // WRITE_AND_SWAP_LONGWORD
+#include "network.h"  // network_getCurrentIp
 #include "pico/time.h"
 #include "tprotocol.h"  // TransmissionProtocol, TPROTO_* payload macros
 
 // --- EPIC-02 IN queue ---
-// Bytes the RP owes the m68k. In the loopback, CMD_MIDI_SEND echoes the OUT byte
-// straight in here; CMD_MIDI_RECV drains it into the shared MIDI_IN_BUFFER.
-// (EPIC-03 fills this from the network instead.) Single producer / single
-// consumer, both on the bus loop, so no locking. Size is a power of two.
+// Bytes the RP owes the m68k. In the loopback, CMD_MIDI_SEND echoes the OUT
+// byte straight in here; CMD_MIDI_RECV drains it into the shared
+// MIDI_IN_BUFFER. (EPIC-03 fills this from the network instead.) Single
+// producer / single consumer, both on the bus loop, so no locking. Size is a
+// power of two.
 #define MIDI_IN_QUEUE_SIZE 1024
 static uint8_t midiInQueue[MIDI_IN_QUEUE_SIZE];
 static uint16_t midiInHead = 0;  // next write
@@ -53,7 +54,9 @@ static inline void __not_in_flash_func(midi_in_push)(uint8_t b) {
 // DEV: set MIDI_NET_HOST to the machine running the echo peer (see the EPIC-03
 // STORY-05 echo server). The RP is a raw-TCP client (lwIP NO_SYS poll mode), so
 // everything below runs from the main loop / lwIP poll context — no locking.
-#define MIDI_NET_HOST "0.0.0.0"  // placeholder — set to the orchestrator's IP for dev; EPIC-04 makes it configurable
+// #define MIDI_NET_HOST "0.0.0.0"  // placeholder — set to the orchestrator's
+// IP for dev; EPIC-04 makes it configurable
+#define MIDI_NET_HOST "192.168.1.41"
 #define MIDI_NET_PORT 5005
 #define MIDI_NET_BACKOFF_MIN_MS 500   // first reconnect delay
 #define MIDI_NET_BACKOFF_MAX_MS 8000  // backoff cap
@@ -150,7 +153,8 @@ static void midi_net_try_connect(void) {
   if (midiNetPcb == NULL) {
     return;
   }
-  tcp_nagle_disable(midiNetPcb);  // TCP_NODELAY — MIDI is latency-sensitive (D-03/C-01)
+  tcp_nagle_disable(
+      midiNetPcb);  // TCP_NODELAY — MIDI is latency-sensitive (D-03/C-01)
   tcp_arg(midiNetPcb, NULL);
   tcp_recv(midiNetPcb, midi_net_recv_cb);
   tcp_err(midiNetPcb, midi_net_err_cb);
@@ -162,8 +166,8 @@ static void midi_net_try_connect(void) {
 }
 
 // STORY-02: send one OUT byte to the orchestrator. Dropped if the link is down
-// (gameplay needs the peer up; STORY-04 surfaces link state). tcp_output flushes
-// immediately — TCP_NODELAY, MIDI is latency-sensitive (C-01).
+// (gameplay needs the peer up; STORY-04 surfaces link state). tcp_output
+// flushes immediately — TCP_NODELAY, MIDI is latency-sensitive (C-01).
 static void midi_net_send_byte(uint8_t b) {
   if (midiNetState != MIDI_NET_UP || midiNetPcb == NULL) {
     return;
@@ -173,10 +177,11 @@ static void midi_net_send_byte(uint8_t b) {
   }
 }
 
-// STORY-04: the on-board green LED mirrors the orchestrator link — steady on when
-// connected, blinking while down/connecting. blink_toogle() self-rate-limits at
-// CHARACTER_GAP_MS, and blink_on() is called once per UP transition (it talks to
-// the CYW43 over SPI, so we don't hammer it every tick).
+// STORY-04: the on-board green LED mirrors the orchestrator link — steady on
+// when connected, blinking while down/connecting. blink_toogle()
+// self-rate-limits at CHARACTER_GAP_MS, and blink_on() is called once per UP
+// transition (it talks to the CYW43 over SPI, so we don't hammer it every
+// tick).
 static void midi_net_update_led(void) {
   if (midiNetState == MIDI_NET_UP) {
     if (!midiNetLedSteady) {
@@ -208,7 +213,8 @@ void midi_net_poll(void) {
   }
   midiNetNextAttemptValid = true;
   midiNetNextAttempt = make_timeout_time_ms(midiNetBackoffMs);
-  // Grow the backoff for the next attempt (reset to MIN on a successful connect).
+  // Grow the backoff for the next attempt (reset to MIN on a successful
+  // connect).
   uint32_t next = midiNetBackoffMs * 2;
   midiNetBackoffMs =
       (next > MIDI_NET_BACKOFF_MAX_MS) ? MIDI_NET_BACKOFF_MAX_MS : next;
@@ -232,9 +238,9 @@ const char *midi_net_status_str(void) {
 // persistent connection; no extra probe traffic.
 void midi_net_ping(char *buf, size_t len) {
   if (midiNetState == MIDI_NET_UP) {
-    uint32_t up_s = (uint32_t)(absolute_time_diff_us(midiNetUpSince,
-                                                     get_absolute_time()) /
-                               1000000);
+    uint32_t up_s =
+        (uint32_t)(absolute_time_diff_us(midiNetUpSince, get_absolute_time()) /
+                   1000000);
     snprintf(buf, len, "%s:%d up (%lus)", MIDI_NET_HOST, MIDI_NET_PORT,
              (unsigned long)up_s);
   } else {
@@ -271,9 +277,10 @@ static void __not_in_flash_func(midi_command_cb)(TransmissionProtocol *protocol,
       break;
     }
     case CMD_MIDI_SEND: {
-      // m68k shipped an OUT byte — send it to the orchestrator. (Was the EPIC-02
-      // local echo; the echo now lives at the network peer.)
-      uint32_t b = TPROTO_GET_PAYLOAD_PARAM32(payloadPtr);  // d3, byte in low 8 bits
+      // m68k shipped an OUT byte — send it to the orchestrator. (Was the
+      // EPIC-02 local echo; the echo now lives at the network peer.)
+      uint32_t b =
+          TPROTO_GET_PAYLOAD_PARAM32(payloadPtr);  // d3, byte in low 8 bits
       midi_net_send_byte((uint8_t)(b & 0xFFu));
       break;
     }

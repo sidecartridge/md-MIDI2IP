@@ -2,7 +2,7 @@
 id: STORY-05
 epic: EPIC-04
 title: Validate — two clients form a ring and exchange bytes
-status: todo
+status: done
 milestone: alpha-mvp
 ---
 
@@ -13,10 +13,11 @@ sends arrive at the other (and back around), with the HTTP status reflecting it.
 
 ## Tasks
 
-- [ ] Two clients (a small stdlib test client, or two `tools/echo_peer.py`-style senders) connect and form a 2-ring
-- [ ] Bytes A sends arrive at B in order, and B's arrive at A — byte-exact, no loss/reorder
-- [ ] The HTTP status / JSON shows both players, their byte counters, and the ring order
-- [ ] A client drop re-forms the ring; reconnect rejoins cleanly (with STORY-04)
+- [x] `orchestrator/selftest.py` spawns the server + two stdlib clients forming a 2-ring (one command, exit 0 = PASS)
+- [x] A→B and B→A byte-exact (`recv_exact`), no loss/reorder
+- [x] `/status.json` shows 2 players online, ring length 2, per-player byte counters
+- [x] A client drop re-forms the ring (1 online); a reconnect rejoins (2 online) and relays again
+- [x] One-connection-per-private-IP classification (STORY-04): private LAN IPs dedup; public (NAT) and loopback are exempt
 
 ## Acceptance
 
