@@ -12,6 +12,9 @@ Scope so far:
     next player's IN (insertion order, wrapping; a ring of one echoes to self).
   - STORY-03: a read-only **HTTP status** interface on a separate port (HTML page
     + `/status.json`), served in the same asyncio loop (race-free registry reads).
+  - STORY-04: **robustness** — TCP keepalive (dead-player detection), bounded
+    write buffers, slow-player drop (a stuck node can't freeze the ring),
+    defensive per-connection error handling, and clean Ctrl-C shutdown.
 
 Usage:  python3 orchestrator/orchestrator.py [--host H] [--port P]
 """
@@ -22,6 +25,7 @@ import asyncio
 import html
 import json
 import logging
+import signal
 import socket
 from dataclasses import dataclass
 from itertools import count
@@ -31,6 +35,26 @@ LOG = logging.getLogger("orchestrator")
 _next_id = count(1)  # monotonic player ids
 _started_at = 0.0  # event-loop clock when serving began (for uptime)
 _listen_addr = ""  # "host:port" of the game TCP server, for display
+
+# A player whose IN can't be written for this long (TCP backpressure) is treated
+# as stuck and dropped, so one slow node can't freeze the lock-step ring.
+SLOW_PLAYER_TIMEOUT_S = 5.0
+WRITE_BUFFER_HIGH = 64 * 1024  # bound per-connection write buffer (bytes)
+
+
+def _enable_keepalive(sock: socket.socket) -> None:
+    """Detect a silently-dead player (no FIN) in ~10s instead of TCP's default.
+    Same approach as tools/echo_peer.py."""
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, "TCP_KEEPIDLE"):  # Linux
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 5)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 2)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+        elif hasattr(socket, "TCP_KEEPALIVE"):  # macOS
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, 5)
+    except OSError:
+        pass  # unsupported — non-fatal
 
 
 @dataclass
@@ -83,16 +107,34 @@ class Registry:
 registry = Registry()
 
 
+def _drop_player(player: Player, reason: str) -> None:
+    """Remove a player from the ring and close its socket (STORY-04). Its own
+    handler coroutine then finishes via EOF and logs the disconnect. Idempotent."""
+    registry.remove(player.id)
+    LOG.warning("dropping player %d (%s): %s", player.id, player.peer, reason)
+    try:
+        player.writer.close()
+    except (ConnectionError, OSError):
+        pass
+
+
 async def handle_player(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
-    """Per-connection coroutine: register, read (count) until EOF, deregister."""
+    """Per-connection coroutine: register, relay this player's OUT to the next
+    player's IN until EOF, deregister. Hardened (STORY-04): keepalive, bounded
+    write buffer, slow-player drop, and defensive error handling."""
     sock = writer.get_extra_info("socket")
     if sock is not None:
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except OSError:
             pass  # not a TCP socket / unsupported — non-fatal
+        _enable_keepalive(sock)
+    try:
+        writer.transport.set_write_buffer_limits(high=WRITE_BUFFER_HIGH)
+    except (AttributeError, NotImplementedError):
+        pass
 
     peername = writer.get_extra_info("peername")
     peer = f"{peername[0]}:{peername[1]}" if peername else "?"
@@ -111,26 +153,32 @@ async def handle_player(
             if not data:
                 break  # clean EOF (peer closed)
             player.bytes_out += len(data)
-            # STORY-02: forward this player's OUT bytes to the next player's IN,
-            # verbatim (D-02). Single source per target (the ring's predecessor),
-            # so no interleaving. A ring of one echoes back to self.
+            # Forward this player's OUT bytes to the next player's IN, verbatim
+            # (D-02). Single source per target, so no interleaving.
             target = registry.next_player(player)
-            if target is not None:
-                try:
-                    target.writer.write(data)
-                    await target.writer.drain()
-                    target.bytes_in += len(data)
-                except (ConnectionError, OSError):
-                    pass  # target died; its own handler will deregister it
+            if target is None:
+                continue
+            try:
+                target.writer.write(data)
+                if target is player:
+                    await target.writer.drain()  # ring of one: echo to self
+                else:
+                    # Bound the wait so one stuck player can't freeze the ring.
+                    await asyncio.wait_for(
+                        target.writer.drain(), timeout=SLOW_PLAYER_TIMEOUT_S
+                    )
+                target.bytes_in += len(data)
+            except asyncio.TimeoutError:
+                _drop_player(target, "too slow (write backpressure)")
+            except (ConnectionError, OSError):
+                pass  # target died; its own handler will deregister it
     except (ConnectionError, OSError) as exc:
         LOG.info("player %d (%s) read error: %s", player.id, peer, exc)
+    except Exception:  # one bad connection must never take down the server
+        LOG.exception("player %d (%s) handler crashed", player.id, peer)
     finally:
         registry.remove(player.id)
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except (ConnectionError, OSError):
-            pass
+        writer.close()  # don't await wait_closed(): can hang under shutdown-cancel
         LOG.info(
             "player %d (%s) disconnected; %d bytes out / %d in (%d online)",
             player.id,
@@ -254,14 +302,45 @@ async def handle_http(
 
 async def serve(host: str, port: int, http_port: int) -> None:
     global _started_at, _listen_addr
-    _started_at = asyncio.get_event_loop().time()
+    loop = asyncio.get_event_loop()
+    _started_at = loop.time()
     _listen_addr = f"{host}:{port}"
+
+    # Clean shutdown via signals (asyncio-idiomatic; KeyboardInterrupt in main()
+    # is the fallback where add_signal_handler isn't supported, e.g. Windows).
+    stop = loop.create_future()
+
+    def _request_stop() -> None:
+        if not stop.done():
+            stop.set_result(None)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _request_stop)
+        except (NotImplementedError, RuntimeError):
+            pass
+
     game = await asyncio.start_server(handle_player, host, port)
     http = await asyncio.start_server(handle_http, host, http_port)
     LOG.info("orchestrator: game on %s:%d, HTTP status on %s:%d",
              host, port, host, http_port)
-    async with game, http:
-        await asyncio.gather(game.serve_forever(), http.serve_forever())
+    try:
+        # start_server is already accepting; stay alive until asked to stop.
+        await stop
+    finally:
+        # Close active player connections FIRST (unblocks their idle reader.read),
+        # then the listeners. We deliberately do NOT use `async with` /
+        # `await server.wait_closed()`: on Python 3.13+ that blocks until every
+        # active connection closes, which hangs shutdown while a player (the RP)
+        # sits idle in reader.read().
+        LOG.info("shutting down; closing %d player connection(s)", len(registry))
+        for player in registry.players():
+            try:
+                player.writer.close()
+            except (ConnectionError, OSError):
+                pass
+        game.close()
+        http.close()
 
 
 def main() -> None:

@@ -2,7 +2,7 @@
 id: STORY-04
 epic: EPIC-04
 title: Robustness — half-open detection, buffers, shutdown
-status: todo
+status: in-progress
 ---
 
 ## Goal
@@ -12,10 +12,10 @@ drops, slow/half-open links, and clean shutdown.
 
 ## Tasks
 
-- [ ] Detect a silently-dead player (TCP keepalive, like `tools/echo_peer.py`) and remove it from the ring promptly
-- [ ] Bound per-connection buffers; a slow/stuck player must not let memory grow unbounded or stall the whole ring
-- [ ] Clean shutdown (Ctrl-C / signal): close sockets, drain, exit without tracebacks
-- [ ] Defensive logging on errors; one bad connection never takes down the server
+- [x] TCP keepalive on every player socket (`_enable_keepalive`, same as `tools/echo_peer.py`) — a silently-dead player surfaces and is deregistered
+- [x] Bounded write buffer (`set_write_buffer_limits`) + a `drain` timeout: a stuck player is **dropped** (`_drop_player`) so it can't freeze the lock-step ring or grow memory
+- [x] Clean shutdown via `loop.add_signal_handler` (SIGINT/SIGTERM): stop, close all player sockets, exit without a traceback (KeyboardInterrupt fallback for Windows)
+- [x] Defensive: `ConnectionError`/`OSError` logged at info, a broad `except Exception` keeps one bad connection from taking down the server (asyncio also isolates each handler)
 
 ## Acceptance
 
