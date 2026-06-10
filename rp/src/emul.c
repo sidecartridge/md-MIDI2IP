@@ -31,6 +31,11 @@
 #include "term.h"
 
 #define SLEEP_LOOP_MS 100
+// App main-loop cadence. Kept small so chandler_loop() services the m68k's
+// busy-waiting MIDI commands promptly: a large wait here adds ~that many ms per
+// MIDI byte (the m68k blocks in send_sync until the RP responds), which breaks
+// MIDI Maze's lock-step ring — COUNT-PLAYERS times out and re-elects (C-01).
+#define BUS_LOOP_MS 1
 
 enum {
   APP_MODE_SETUP = 255  // Setup
@@ -488,9 +493,9 @@ void emul_start() {
   while (getKeepActive()) {
 #if PICO_CYW43_ARCH_POLL
     network_safePoll();
-    cyw43_arch_wait_for_work_until(make_timeout_time_ms(SLEEP_LOOP_MS));
+    cyw43_arch_wait_for_work_until(make_timeout_time_ms(BUS_LOOP_MS));
 #else
-    sleep_ms(SLEEP_LOOP_MS);
+    sleep_ms(BUS_LOOP_MS);
 #endif
     // EPIC-03: drive the orchestrator TCP connection (no-op until Wi-Fi is up).
     midi_net_poll();
