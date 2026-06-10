@@ -5,13 +5,13 @@ A central server that connects players into a MIDI Maze ring by relaying raw
 bytes (D-02/D-04). Python 3 **standard library only** — no third-party packages,
 ever.
 
-Scope so far — EPIC-04 STORY-01: an asyncio TCP server that accepts player
-connections (a ST+RP, or a Hatari gateway) and tracks them in a registry
-(id, peer, connect time, byte counters). It does **not** yet:
-  - relay bytes between players (the ring)        -> STORY-02
-  - serve HTTP status                              -> STORY-03
-So incoming bytes are counted and discarded for now; the `registry` is exposed
-for those stories to build on.
+Scope so far:
+  - STORY-01: asyncio TCP server; a registry of players (id, peer, connect time,
+    byte counters).
+  - STORY-02: the **ring relay** — each player's OUT bytes are forwarded to the
+    next player's IN (insertion order, wrapping; a ring of one echoes to self).
+It does **not** yet serve HTTP status (-> STORY-03); the `registry` is exposed
+for that.
 
 Usage:  python3 orchestrator/orchestrator.py [--host H] [--port P]
 """
@@ -57,6 +57,20 @@ class Registry:
     def players(self) -> "list[Player]":
         return list(self._players.values())
 
+    def next_player(self, player: Player) -> "Player | None":
+        """The player after `player` in the ring (insertion order, wrapping).
+
+        Ring of one -> the player itself (self-loop / echo, the faithful
+        ring-of-one). Returns None if `player` is no longer connected. Computed
+        fresh each call so the ring re-forms on every join/leave."""
+        ids = list(self._players)
+        if player.id not in self._players:
+            return None
+        if len(ids) == 1:
+            return player  # ring of one: echo back to self
+        nxt = ids[(ids.index(player.id) + 1) % len(ids)]
+        return self._players[nxt]
+
     def __len__(self) -> int:
         return len(self._players)
 
@@ -93,8 +107,17 @@ async def handle_player(
             if not data:
                 break  # clean EOF (peer closed)
             player.bytes_out += len(data)
-            # STORY-02: forward `data` to the next player in the ring.
-            # STORY-01: count and discard.
+            # STORY-02: forward this player's OUT bytes to the next player's IN,
+            # verbatim (D-02). Single source per target (the ring's predecessor),
+            # so no interleaving. A ring of one echoes back to self.
+            target = registry.next_player(player)
+            if target is not None:
+                try:
+                    target.writer.write(data)
+                    await target.writer.drain()
+                    target.bytes_in += len(data)
+                except (ConnectionError, OSError):
+                    pass  # target died; its own handler will deregister it
     except (ConnectionError, OSError) as exc:
         LOG.info("player %d (%s) read error: %s", player.id, peer, exc)
     finally:

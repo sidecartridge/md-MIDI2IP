@@ -2,7 +2,7 @@
 id: STORY-02
 epic: EPIC-04
 title: Ring relay (single global ring)
-status: todo
+status: in-progress
 milestone: alpha-mvp
 ---
 
@@ -14,10 +14,10 @@ never interprets MIDI Maze (D-02).
 
 ## Tasks
 
-- [ ] Maintain a ring order over the connection registry; for the MVP, all connected players form **one** ring
-- [ ] Forward each player's received (OUT) bytes to the next player in the ring (their IN), verbatim, promptly (no Nagle, no batching beyond a tiny coalesce)
-- [ ] Re-form the ring cleanly on join/leave (a 2-player ring is A↔B; 1 player relays to itself or idles — define it)
-- [ ] Update OUT/IN byte counters; never reorder or drop within a connection
+- [x] `Registry.next_player` defines the ring (insertion order, wrapping); single global ring for the MVP
+- [x] Forward each player's OUT bytes to the next player's IN verbatim (`write` + `drain`, `TCP_NODELAY` from STORY-01), single source per target
+- [x] Ring re-forms on join/leave (`next_player` computed fresh each chunk); **1 player = self-loop/echo** (the faithful ring-of-one), 2 players = A↔B
+- [x] Counters: source `bytes_out` on read, target `bytes_in` on forward; in-order, no drop within a connection
 
 ## Acceptance
 

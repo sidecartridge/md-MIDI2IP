@@ -13,9 +13,9 @@ The RP firmware's `MIDI_NET_HOST`/`PORT` (EPIC-03) points here.
 
 ## Status
 
-- **STORY-01 (done here):** asyncio TCP server + connection registry (id, peer,
-  connect time, byte counters), `TCP_NODELAY`, connect/disconnect logging.
-  Incoming bytes are counted and discarded — no relay yet.
-- STORY-02 — ring relay (forward each player's OUT to the next player's IN)
+- **STORY-01:** asyncio TCP server + connection registry (id, peer, connect time,
+  byte counters), `TCP_NODELAY`, connect/disconnect logging.
+- **STORY-02:** ring relay — each player's OUT bytes go to the next player's IN
+  (insertion order, wrapping); a ring of one echoes to self.
 - STORY-03 — HTTP status (HTML + JSON, separate port)
 - STORY-04 — robustness (keepalive, bounded buffers, clean shutdown)
