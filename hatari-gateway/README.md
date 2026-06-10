@@ -6,8 +6,12 @@ running in Hatari becomes a virtual player — no hardware needed. **Python 3
 standard library only.**
 
 ```sh
-python3 hatari-gateway/gateway.py [--dir DIR]    # default DIR: /tmp/hatari-midi
+python3 hatari-gateway/gateway.py [--dir DIR] [--host H] [--port P]
+# default: DIR=/tmp/hatari-midi, orchestrator 127.0.0.1:5005
 ```
+
+It waits for Hatari to open the FIFOs, connects to the orchestrator, and bridges
+raw bytes both ways. (Start the orchestrator first; reconnect is STORY-03.)
 
 It creates two FIFOs and prints the exact Hatari command. The `--midi-in` /
 `--midi-out` file flags enable MIDI on their own (no separate `--midi` flag):
@@ -29,6 +33,7 @@ Self-test (FIFO lifecycle): `python3 hatari-gateway/selftest.py` (exit 0 = PASS)
 
 - **STORY-01:** FIFO lifecycle — create (idempotent), documented Hatari
   invocation, robust open (any start order), cleanup.
-- STORY-02 — bridge core (OUT fifo → orchestrator; orchestrator → IN fifo)
+- **STORY-02:** bridge core — `select()` pump, OUT fifo → orchestrator and
+  orchestrator → IN fifo, verbatim.
 - STORY-03 — orchestrator client (connect, reconnect, status)
 - STORY-04 — validate: Hatari MIDI Maze joins the ring as a player

@@ -13,10 +13,12 @@ So we use two FIFOs:
   midi_out.fifo : Atari MIDI OUT -> the gateway READS  (Hatari's --midi-out)
   midi_in.fifo  : Atari MIDI IN  -> the gateway WRITES (Hatari's --midi-in)
 
-Scope so far — STORY-01: create the FIFOs, document the Hatari invocation, and
-open both ends robustly (non-blocking, tolerant of Hatari starting before or
-after us). The bridge loop (STORY-02) and orchestrator client (STORY-03) come
-next.
+Scope so far:
+  - STORY-01: create the FIFOs, document the Hatari invocation, open both ends
+    robustly (non-blocking, any start order).
+  - STORY-02: the bridge — pump raw bytes both ways between the FIFOs and the
+    orchestrator socket (select-driven, single-thread, verbatim).
+The orchestrator client lifecycle (connect / reconnect / status) is STORY-03.
 
 Usage:  python3 hatari-gateway/gateway.py [--dir DIR]
 """
@@ -24,7 +26,10 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import os
+import select
+import socket
 import stat
 import time
 
@@ -75,6 +80,57 @@ def open_fifos(out_path: str, in_path: str, poll: float = 0.2) -> tuple[int, int
         raise
 
 
+def _set_blocking(fd: int) -> None:
+    fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) & ~os.O_NONBLOCK)
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """os.write may write fewer bytes than requested — loop so we never drop
+    MIDI bytes (a dropped byte desyncs the ring -> 'MIDI ring boo boo')."""
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+
+
+def bridge(out_fd: int, in_fd: int, sock: socket.socket) -> None:
+    """STORY-02: pump raw bytes both ways until either end closes, then return.
+
+      Atari MIDI OUT (out_fd, read) -> orchestrator (sock)
+      orchestrator (sock)          -> Atari MIDI IN  (in_fd, write)
+
+    Verbatim, in order, no parsing (D-02). select() drives readiness so reads
+    never block; writes (sendall / os.write) may briefly block on backpressure,
+    which is fine at MIDI rates. This is the software twin of the RP byte pipe:
+    out_fd ~ CMD_MIDI_SEND, in_fd ~ CMD_MIDI_RECV -> Iorec."""
+    _set_blocking(out_fd)
+    _set_blocking(in_fd)
+    sock.setblocking(True)
+    while True:
+        try:
+            readable, _, _ = select.select([out_fd, sock], [], [])
+        except (OSError, ValueError):
+            return
+        if out_fd in readable:
+            data = os.read(out_fd, 4096)
+            if not data:  # Hatari closed its MIDI-out
+                return
+            try:
+                sock.sendall(data)
+            except OSError:
+                return
+        if sock in readable:
+            try:
+                data = sock.recv(4096)
+            except OSError:
+                return
+            if not data:  # orchestrator closed
+                return
+            try:
+                _write_all(in_fd, data)
+            except OSError:
+                return
+
+
 def remove_fifos(dirpath: str) -> None:
     for name in (FIFO_OUT, FIFO_IN):
         try:
@@ -89,6 +145,12 @@ def main() -> None:
         "--dir", default="/tmp/hatari-midi",
         help="directory for the MIDI FIFOs (default: /tmp/hatari-midi)",
     )
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="orchestrator host (default: 127.0.0.1)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=5005, help="orchestrator port (default: 5005)"
+    )
     args = parser.parse_args()
 
     out_path, in_path = create_fifos(args.dir)
@@ -96,17 +158,26 @@ def main() -> None:
     print(f"  {out_path}  (Atari MIDI OUT -> gateway)")
     print(f"  {in_path}  (gateway -> Atari MIDI IN)")
     print(f"\nLaunch Hatari with:\n  {hatari_command(args.dir)}\n")
-    print("waiting for Hatari to open the MIDI FIFOs ... (Ctrl-C to quit)")
+
     out_fd = in_fd = None
+    sock = None
     try:
+        print("waiting for Hatari to open the MIDI FIFOs ... (Ctrl-C to quit)")
         out_fd, in_fd = open_fifos(out_path, in_path)
-        print("connected to Hatari — ready to bridge (STORY-02).")
-        # STORY-02 runs the bridge loop here. For STORY-01, idle until Ctrl-C.
-        while True:
-            time.sleep(1)
+        print("connected to Hatari.")
+        print(f"connecting to orchestrator {args.host}:{args.port} ...")
+        sock = socket.create_connection((args.host, args.port))
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        print("connected to orchestrator — bridging. (reconnect is STORY-03)")
+        bridge(out_fd, in_fd, sock)
+        print("bridge ended (a side disconnected).")
     except KeyboardInterrupt:
         print("\nbye")
+    except OSError as exc:
+        print(f"error: {exc}")
     finally:
+        if sock is not None:
+            sock.close()
         if out_fd is not None:
             os.close(out_fd)
         if in_fd is not None:
