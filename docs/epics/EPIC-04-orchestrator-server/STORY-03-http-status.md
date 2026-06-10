@@ -2,7 +2,7 @@
 id: STORY-03
 epic: EPIC-04
 title: HTTP status interface
-status: todo
+status: in-progress
 milestone: alpha-mvp
 ---
 
@@ -14,10 +14,10 @@ port** from the game TCP server.
 
 ## Tasks
 
-- [ ] HTTP endpoint on its own port (default `8080`), served alongside the asyncio loop
-- [ ] **HTML** page: server status (uptime, listen addr, player count), the connected players (id, peer addr, connect time, OUT/IN bytes), and the current ring order
-- [ ] **JSON** endpoint (e.g. `/status.json`) with the same data, machine-readable
-- [ ] Never blocks the relay loop; read-only (no control actions in the MVP)
+- [x] HTTP responder on its own port (`--http-port`, default `8080`), a 2nd `asyncio.start_server` in the same loop
+- [x] **HTML** page (auto-refresh): uptime, listen addr, player count, the ring order, and a per-player table (id, peer, connect time, OUT/IN bytes)
+- [x] **JSON** endpoint `/status.json` with the same snapshot (`json.dumps`), machine-readable
+- [x] Read-only and race-free — same loop as the relay (no `http.server` thread, no locks), never blocks it
 
 ## Acceptance
 
