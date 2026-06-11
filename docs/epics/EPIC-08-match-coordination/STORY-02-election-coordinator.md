@@ -2,34 +2,37 @@
 id: STORY-02
 epic: EPIC-08
 title: Master-election coordinator (one stable master, any launch order)
-status: todo
+status: done
 milestone: alpha-mvp
 ---
 
 ## Goal
 
-Guarantee **exactly one stable MASTER** regardless of launch order, so
-COUNT-PLAYERS completes. Today (hardware, D-11): machines launched
-asynchronously each auto-elect; a SLAVE forwards every `0x00`, so with no single
-master the election byte loops forever, and stray `0x00`s re-trigger election
-*mid-count* — the MASTER reads 0 (or a garbage) player count and never starts.
+Keep the MASTER **stable** so COUNT-PLAYERS completes. Ground truth (thesis Annex B
+clone analysis): a node that *sends* `0x00` and gets it back becomes MASTER, but a
+node that *receives* a `0x00` becomes **SLAVE**. So a stray `0x00` from another node
+**demotes the sitting master**. On hardware (D-11), both nodes keep emitting `0x00`,
+each one demoting the master mid-count, so it never finishes the count → "0 machines".
+The natural election (with the ring-of-one self-echo) already picks a master; the job
+here is to stop it being demoted.
 
 ## Tasks
 
-- [ ] **Spike the rule**: lock in the first node whose `0x00` completes the ring as MASTER; decide **passive** (suppress conflicting `0x00`s once a master exists) vs **active** (orchestrator drives one clean election when the ring is stable for T ms)
-- [ ] Once a master is locked, stop stray `0x00` MASTER-ELECT bytes from *other* nodes from resetting it until membership changes — so COUNT-PLAYERS isn't interrupted
-- [ ] Re-run a clean election on membership change (join / drop) so the ring re-forms with a single master (D-04)
-- [ ] Gate behind a flag: **off → pure dumb relay** (D-02/D-10, today's default); **on → coordinated**. Document exactly which bytes the orchestrator suppresses/injects
+- [x] **Rule (master-protection)**: once a master is established (it originates COUNT-PLAYERS / NAME-DIALOG / START-GAME), drop a **non-master's stray MASTER-ELECT `0x00`** from the forwarded bytes so it can't demote the master. Byte-selective in `RingState.feed`: count *values*, the master's own `0x00`, and in-game joystick `0x00` are untouched (the decoder distinguishes them). The ring stays fully intact — no echo/restructure
+- [x] Master identity is the **COUNT-PLAYERS originator** (only the master originates it), not the ambiguous `0x00` — so `_observe` no longer locks master from MASTER-ELECT
+- [x] Membership change: a **join keeps the sitting master** (newcomer → SLAVE); only the **master leaving** (or empty ring) re-elects (`remove_player` → `_reset_round`, D-04)
+- [x] Gated behind `--coordinate`: **off → pure dumb relay** (D-02/D-10 default); **on → master-protected**. Unit+live tested in `selftest.py` Phase D (drop non-master demote `0x00`; keep count values / master's own / joystick)
 
 ## Acceptance
 
-Two machines launched in **any order** converge to exactly one MASTER, and
-COUNT-PLAYERS returns the correct count (2) with no re-election storm — verified
-in the `--inspect` trace.
+With both machines connected, once a master starts COUNT-PLAYERS it **stays** master
+(no demotion by stray `0x00`s) and the count settles to the right number — verified
+in the `--inspect` trace and on hardware.
 
 ## Notes
 
-This is the **first** place the orchestrator stops being byte-dumb (D-02), so it
-is opt-in and orchestrator-only (the RP/gateway stay dumb). Acts on STORY-01's
-model. The exact suppress/inject rule is the spike's job — keep it the minimal
-intervention that makes election converge, not a full protocol re-implementation.
+The **first** place the orchestrator stops being byte-dumb (D-02): opt-in,
+orchestrator-only (RP/gateway stay dumb), and the **minimal** intervention — it
+drops exactly one kind of byte (a non-master's demotion `0x00`) and never injects
+or restructures. Replaces the earlier echo attempt, which broke the ring and made
+the master flood (see git history).

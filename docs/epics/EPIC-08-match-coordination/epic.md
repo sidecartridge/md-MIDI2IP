@@ -1,7 +1,8 @@
 ---
 id: EPIC-08
+iteration: 1
 title: Match coordination (smart orchestrator)
-status: todo
+status: done
 ---
 
 ## Goal
@@ -39,7 +40,10 @@ flag** so the dumb ring relay stays the default (D-02/D-10).
 - STORY-01 — Ring protocol-state model (stateful, authoritative — built on `--inspect`)
 - STORY-02 — Master-election coordinator (one stable master, any launch order)
 - STORY-03 — Ring flow-control: survive the ~4 KB SEND-DATA without loss
-- STORY-04 — Validate: a full 2-player MIDI Maze match starts and plays
+- STORY-04 — Validate: Hatari MIDI Maze + smart orchestrator (single node)
+
+_(The full 2-player **hardware** match moved to EPIC-10 STORY-02, Iteration 2 —
+gated on the D-12 transport fix.)_
 
 ## Notes
 
@@ -50,3 +54,21 @@ orchestrator stops being byte-dumb (D-02) — gated, opt-in, orchestrator-only.
 References: D-02 (dumb pipe, now selectively relaxed in the orchestrator behind a
 flag), D-04 (ring stable before a game), D-09/D-10 (the smart epic), C-01
 (lock-step / latency), D-11 (the two blockers).
+
+## Outcome (Iteration 1) — complete
+
+The orchestrator-side coordination layer is **built, self-tested, and validated
+against a real client**:
+
+- **STORY-01 (protocol-state model)** + **STORY-02 (election coordinator)** —
+  done. `RingState` + the `--coordinate` master-protection are unit- and
+  live-tested in `selftest.py` (Phases C/D); a `--no-http` flag was added so the
+  status server can't add jitter to the relay.
+- **STORY-03 (ring flow-control)** — done: the RP IN queue is now 16 KB, so the
+  ~4 KB `SEND-DATA` burst no longer drops bytes (the D-11(b) overflow).
+- **STORY-04 (validate — Hatari + smart orchestrator, single node)** — done: a
+  real MIDI Maze node (Hatari gateway) brings up cleanly against `--coordinate`.
+- The full 2-player **hardware** match (the old STORY-04) **moved to EPIC-10
+  STORY-02** (Iteration 2): it isn't blocked by the coordination logic but by the
+  transport ceiling (**D-12**) — a hardware match can't sustain lock-step at
+  ~970 bytes/s.

@@ -1,6 +1,6 @@
 # MIDI-to-IP
 
-MIDI-to-IP is a microfirmware for the SidecarTridge Multidevice that redirects all the MIDI IN and OUT traffic from an Atari ST computer to a network endpoint, by hooking the BIOS and XBIOS calls. It runs as a UF2 image on a Raspberry Pi Pico (RP2040) plugged into the Multi-device cartridge slot for Atari ST / STE / MegaST(E) computers.
+MIDI-to-IP is a microfirmware for the SidecarTridge Multidevice that redirects all the MIDI IN and OUT traffic from an Atari ST computer to a network endpoint, by hooking the BIOS device-3 calls (`Bconstat`/`Bconin`/`Bconout`). It runs as a UF2 image on a Raspberry Pi Pico (RP2040) plugged into the Multi-device cartridge slot for Atari ST / STE / MegaST(E) computers.
 
 # ⚠️ ATTENTION! READ THIS FIRST
 
@@ -24,9 +24,9 @@ See `programming.md` for the full table and the budget rules.
 The cartridge image is split via `target/atarist/src/userfw.ld` into two sections:
 
 - `main.s` at offset `0x0000` (`$FA0000`, 2 KB) — boot, dispatch, terminal.
-- `userfw.s` at offset `0x0800` (`$FA0800`, 6 KB) — the MIDI-to-IP m68k logic that hooks the BIOS/XBIOS MIDI calls.
+- `userfw.s` at offset `0x0800` (`$FA0800`, 6 KB) — the MIDI-to-IP m68k logic that hooks the BIOS device-3 MIDI calls.
 
-`main.s` exposes the user firmware as `USERFW equ (ROM4_ADDR + $800)`. When the RP-side terminal command `f` (`[F]irmware`) is selected, the RP writes `CMD_START = 4` to the cartridge sentinel; the m68k's vsync-polled `check_commands` dispatches to `rom_function`, which `jmp`s to `USERFW`. (`userfw.s` currently holds a Cconws stub that prints `Example firmware load...`; the MIDI hooking logic replaces this body.)
+`main.s` exposes the user firmware as `USERFW equ (ROM4_ADDR + $800)`. When the RP-side terminal command `f` (`[F]irmware`) is selected, the RP writes `CMD_START = 4` to the cartridge sentinel; the m68k's vsync-polled `check_commands` dispatches to `rom_function`, which `jmp`s to `USERFW`. (`userfw.s` holds the MIDI-to-IP BIOS device-3 hook — `Bconstat`/`Bconin`/`Bconout` — serviced directly against the RP's network queues.)
 
 Additional m68k modules follow the `gemdrive.ld`-style pattern: place each new `.text` section in `userfw.ld`, mirror the offset with an `equ` in `main.s`, and add the `.o` target to `target/atarist/Makefile`.
 

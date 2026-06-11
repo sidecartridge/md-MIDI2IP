@@ -6,7 +6,7 @@ under `orchestrator/` (**EPIC-04**, Python 3 stdlib only — revises the earlier
 the two sides: the wire format and the ring semantics the firmware (EPIC-03)
 depends on and the server (EPIC-04) implements.
 
-It captures decisions D-02 (raw bytes), D-03 (TCP), D-04 (ring topology),
+It captures decisions D-02 (raw bytes), D-03 (TCP), D-04 (ring tioopology),
 D-08 (raw sockets, no host MIDI), and constraint C-01 (lock-step latency).
 
 ## The boundary
@@ -17,10 +17,10 @@ orchestrator. That connection is the entire interface:
 ```
  Atari (MIDI Maze)            Pico-W firmware (this repo)         Orchestrator (other repo)
   Bconout(3) ───────────────▶ capture ──▶ socket send ──────────▶ player N's MIDI OUT
-  Bconin(3)/XBIOS readback ◀── inject ◀── socket recv ◀────────── player N's MIDI IN
+  Bconin(3)/Bconstat(3) ◀──── serve ◀──── socket recv ◀────────── player N's MIDI IN
 ```
 
-- **This repo (firmware):** turns MIDI Maze's BIOS/XBIOS MIDI I/O into one
+- **This repo (firmware):** turns MIDI Maze's BIOS device-3 MIDI I/O into one
   bidirectional raw byte stream over TCP. It knows nothing about the ring — "what
   I write is my MIDI OUT, what I read is my MIDI IN."
 - **Orchestrator repo:** holds all players, forms the ring, and routes the bytes.

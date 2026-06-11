@@ -1,6 +1,6 @@
 ---
-id: STORY-04
-epic: EPIC-08
+id: STORY-02
+epic: EPIC-10
 title: Validate — a full 2-player MIDI Maze match starts and plays
 status: todo
 milestone: alpha-mvp

@@ -2,7 +2,7 @@
 id: STORY-04
 epic: EPIC-05
 title: Validate — Hatari MIDI Maze joins the ring as a player
-status: todo
+status: done
 milestone: alpha-mvp
 ---
 
@@ -14,10 +14,10 @@ second player a match actually starts and plays.
 
 ## Tasks
 
-- [ ] Hatari runs MIDI Maze with the two FIFOs; the gateway connects to the orchestrator and the ring forms
-- [ ] Master election + COUNT-PLAYERS round-trip over the gateway (parity with the RP firmware's handshake)
-- [ ] With a **second** player (a real ST+RP, or a 2nd Hatari+gateway), a MIDI Maze match **starts and plays** in sync (closes the D-09 gap)
-- [ ] The orchestrator HTTP status shows the Hatari gateway as a connected player in the ring
+- [x] Hatari runs MIDI Maze with the two FIFOs; the gateway connects to the orchestrator and the ring forms
+- [x] Master election + COUNT-PLAYERS round-trip over the gateway (parity with the RP firmware's handshake)
+- [x] With a **second** player (a real ST+RP, or a 2nd Hatari+gateway), a MIDI Maze match **starts and plays** in sync (closes the D-09 gap)
+- [x] The orchestrator HTTP status shows the Hatari gateway as a connected player in the ring
 
 ## Acceptance
 

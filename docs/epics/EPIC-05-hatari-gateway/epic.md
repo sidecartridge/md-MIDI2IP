@@ -1,7 +1,8 @@
 ---
 id: EPIC-05
+iteration: 1
 title: Hatari gateway
-status: todo
+status: done
 ---
 
 ## Goal
@@ -46,6 +47,17 @@ Hatari's `--midi-in`) continuously.
 ## Notes
 
 Maps 1:1 onto the RP firmware we built: the OUT fifo is the m68k `CMD_MIDI_SEND`
-side, the IN fifo is the `CMD_MIDI_RECV` / Iorec side, and the orchestrator client
+side, the IN fifo is the `CMD_MIDI_RECV` / Bconin side, and the orchestrator client
 mirrors `midi_net_*`. Stdlib-only and FIFO-based keeps it portable and trivially
 runnable next to Hatari.
+
+## Outcome (Iteration 1) — complete
+
+The gateway **works end to end**: a full MIDI Maze match plays through the
+orchestrator with the Hatari gateway as a player, so all four stories are done
+(FIFO setup, bridge core, orchestrator client, and full-match validation). This
+closes the D-09 gap purely in software — no hardware needed.
+
+Note: the gateway is a pure-software peer (FIFO ↔ TCP), so it does **not** hit the
+RP-hardware throughput ceiling (**D-12**); that ceiling is on the m68k↔RP command
+path and is EPIC-08 STORY-04 / EPIC-09's problem, not this epic's.

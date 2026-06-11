@@ -12,18 +12,24 @@ hand).
 ```
 docs/epics/
   cockpit.sh                     # regenerates STATUS.md from the files below
-  STATUS.md                      # generated dashboard
+  STATUS.md                      # generated dashboard (epics grouped by iteration)
+  ITERATIONS.md                  # iteration narrative (goal + outcome per iteration)
   templates/                     # copy these when adding new work
     epic.md
     story.md
   EPIC-01-<slug>/
-    epic.md                      # the epic
+    epic.md                      # the epic (carries `iteration: N`)
     STORY-01-<slug>.md           # a story (with its tasks inside)
     STORY-02-<slug>.md
   EPIC-02-<slug>/
     ...
 ```
 
+- **Iteration** — a time-boxed pass with one overarching goal, grouping several
+  epics. Each `epic.md` carries an `iteration: N` field; the cockpit groups epics
+  under their iteration and [`ITERATIONS.md`](ITERATIONS.md) holds the narrative
+  (goal + outcome). A story consciously postponed to a later iteration gets
+  `status: deferred`.
 - **Epic** — a folder `EPIC-NN-<slug>/` with an `epic.md`. A coarse capability.
 - **Story** — a file `STORY-NN-<slug>.md` inside an epic folder. A shippable
   slice of that epic.
@@ -44,14 +50,19 @@ not from `status`.
 ---
 id: STORY-02
 epic: EPIC-01
-title: Hook XBIOS Midiws for MIDI output
-status: in-progress   # todo | in-progress | done | blocked
+title: Capture MIDI output (BIOS Bconout, device 3)
+status: in-progress   # todo | in-progress | done | blocked | deferred
 ---
 ```
 
 Keep `status` honest relative to the checkboxes: `todo` = no tasks done,
 `done` = all tasks done, `in-progress` = some, `blocked` = waiting on something
-(note why in the body).
+(note why in the body), `deferred` = consciously postponed to a later iteration
+(its tasks stay open; the epic's Outcome section says why).
+
+A `done` **epic** may sit below 100% when it contains `deferred` stories — the
+epic's productive work for its iteration is complete, and the deferred slice is
+explicitly carried forward (see [`ITERATIONS.md`](ITERATIONS.md)).
 
 An optional `milestone: alpha-mvp` field marks a story as part of the alpha MVP
 (see Roadmap below). The cockpit tracks MVP progress separately when present.
@@ -106,8 +117,9 @@ The alpha cut plays MIDI Maze across the network. EPIC-01 delivers a self-
 contained solo game (local loopback); EPIC-02 routes it through the RP; EPIC-03
 connects two players via the Python orchestrator. Stories in this cut carry
 `milestone: alpha-mvp`; the cockpit reports their progress on a dedicated line.
-Out of the alpha cut: the XBIOS `Midiws` hook (unused by MIDI Maze, D-05),
-reconnect polish, ping, the status UI, latency tuning, and template trimming.
+Out of the alpha cut: reconnect polish, ping, the status UI, latency tuning, and
+template trimming. (MIDI Maze never uses XBIOS `Midiws`/`Iorec`, so neither is
+hooked — D-05.)
 
 ## Adding work
 

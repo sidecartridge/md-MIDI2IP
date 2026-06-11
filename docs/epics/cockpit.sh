@@ -48,6 +48,7 @@ grand_total=0
 grand_mvp_done=0
 grand_mvp_total=0
 body=""
+prev_iter=""
 
 shopt -s nullglob
 for epic_dir in "$HERE"/EPIC-*/; do
@@ -58,6 +59,14 @@ for epic_dir in "$HERE"/EPIC-*/; do
   epic_title="$(field "$epic_md" title)"
   epic_status="$(field "$epic_md" status)"
   [[ -n "$epic_status" ]] || epic_status="todo"
+
+  # Group epics under their iteration (see ITERATIONS.md for the narrative).
+  epic_iter="$(field "$epic_md" iteration)"
+  [[ -n "$epic_iter" ]] || epic_iter="(unassigned)"
+  if [[ "$epic_iter" != "$prev_iter" ]]; then
+    body+="$(printf '## Iteration %s\n' "$epic_iter")"$'\n\n'
+    prev_iter="$epic_iter"
+  fi
 
   epic_done=0
   epic_total=0
@@ -85,7 +94,7 @@ for epic_dir in "$HERE"/EPIC-*/; do
   grand_done=$(( grand_done + epic_done ))
   grand_total=$(( grand_total + epic_total ))
 
-  body+="$(printf '## %s · %s\n`%s` %s %s%% (%s/%s)\n\n%s\n' \
+  body+="$(printf '### %s · %s\n`%s` %s %s%% (%s/%s)\n\n%s\n' \
     "$epic_id" "$epic_title" "$epic_status" \
     "$(bar "$epic_done" "$epic_total")" "$(pct "$epic_done" "$epic_total")" \
     "$epic_done" "$epic_total" "$stories")"$'\n\n'

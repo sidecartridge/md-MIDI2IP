@@ -1,5 +1,6 @@
 ---
 id: EPIC-02
+iteration: 1
 title: MIDI byte transport (m68k ↔ RP)
 status: done
 ---
@@ -21,7 +22,7 @@ m68k can only *read* them and owns no shared-region state. The two directions:
   and returns. No readback.
 - **IN** (RP → m68k): the m68k pulls pending bytes via `CMD_MIDI_RECV`; the RP
   writes them into a shared buffer + count that appear as ROM, the m68k reads
-  them and injects them into `Iorec` (ST RAM) — exactly GEMDRIVE's
+  them and delivers them to `Bconin` (from the RP IN queue) — like GEMDRIVE's
   `READ_BUFFER`/`READ_BYTES` pattern.
 
 The RP echoes OUT→IN (the loopback now lives in the RP); EPIC-03 swaps the echo
@@ -38,7 +39,7 @@ for the network.
 ## Stories
 
 - STORY-01 — Define the byte-pipe protocol + shared IN buffer
-- STORY-02 — m68k: ship OUT via CMD_MIDI_SEND; pull IN via CMD_MIDI_RECV → Iorec
+- STORY-02 — m68k: ship OUT via CMD_MIDI_SEND; pull IN via CMD_MIDI_RECV → Bconin
 - STORY-03 — RP: byte queues + OUT→IN echo (CMD_MIDI_SEND/RECV handlers)
 - STORY-04 — Validate: solo MIDI Maze over the byte pipe
 

@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-05
 title: FIFO setup + documented Hatari invocation
-status: in-progress
+status: done
 milestone: alpha-mvp
 ---
 

@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-08
 title: Ring protocol-state model (stateful, authoritative)
-status: in-progress
+status: done
 milestone: alpha-mvp
 ---
 

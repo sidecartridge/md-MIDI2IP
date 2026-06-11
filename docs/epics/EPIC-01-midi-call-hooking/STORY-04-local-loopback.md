@@ -17,7 +17,7 @@ EPIC-02/03 later route through the RP and the network.
 
 ## Tasks
 
-- [x] In the `Bconout(3)` hook, echo each captured byte into the Iorec input buffer, then chain so Bconout still returns normally
+- [x] In the `Bconout(3)` hook, echo each captured byte back to the ST's MIDI input, then chain so Bconout still returns normally
 - [x] Confirm master election: the ST receives its own `0x00` and becomes MASTER
 - [x] Confirm non-MIDI I/O is undisturbed (boots to GEM, keyboard/screen normal, no instability)
 - [x] Confirm MIDI Maze reaches MASTER + the config screen via the loopback

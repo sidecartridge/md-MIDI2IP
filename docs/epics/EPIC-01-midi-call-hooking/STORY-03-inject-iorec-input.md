@@ -1,10 +1,15 @@
 ---
 id: STORY-03
 epic: EPIC-01
-title: Inject MIDI input (the Iorec(2) buffer)
+title: Deliver MIDI input to Bconin(3)/Bconstat(3)
 status: done
 milestone: alpha-mvp
 ---
+
+> **Superseded:** this story delivered input by injecting into the system
+> `Iorec(2)` buffer. The BIOS hook now serves `Bconin`/`Bconstat` **directly**
+> from the RP queue — no Iorec at all (D-05). The body below is the original
+> record.
 
 ## Goal
 
