@@ -26,7 +26,6 @@
 #include "network.h"
 #include "reset.h"
 #include "romemul.h"
-#include "sdcard.h"
 #include "select.h"
 #include "tprotocol.h"
 
@@ -201,6 +200,22 @@ static uint8_t prevCursorY = 0;
 static char inputBuffer[TERM_INPUT_BUFFER_SIZE];
 static size_t inputLength = 0;
 
+// Terminal input mode + the active single-key command (md-drives-emulator
+// command-level model). Default COMMAND_INPUT keeps the classic "command arg"
+// line; the boot menu (emul.c) switches to SINGLE_KEY, and a field editor to
+// DATA_INPUT (re-invoking the command that opened it on Enter).
+static uint8_t commandLevel = TERM_COMMAND_LEVEL_COMMAND_INPUT;
+static char lastSingleKeyCommand = 0;
+
+uint8_t term_getCommandLevel(void) { return commandLevel; }
+void term_setCommandLevel(uint8_t level) { commandLevel = level; }
+void term_setLastSingleKeyCommand(char key) { lastSingleKeyCommand = key; }
+
+// Monotonic keystroke counter — emul.c reads it to stop the boot countdown on
+// ANY keypress (whether or not the key maps to a menu command).
+static volatile uint32_t keystrokeSeq = 0;
+uint32_t term_getKeystrokeSeq(void) { return keystrokeSeq; }
+
 // Getter method for inputBuffer
 char *term_getInputBuffer(void) { return inputBuffer; }
 
@@ -333,6 +348,14 @@ static void vt52ProcessSequence(const char *seq, size_t length) {
         }
       }
       break;
+    case 'p':  // Enable reverse video (inverted text) — md-drives-emulator style
+      u8g2_DrawBox(display_getU8g2Ref(), 0, cursorY * DISPLAY_TERM_CHAR_HEIGHT,
+                   DISPLAY_WIDTH, DISPLAY_TERM_CHAR_HEIGHT);
+      u8g2_SetDrawColor(display_getU8g2Ref(), 0);
+      break;
+    case 'q':  // Disable reverse video (back to normal text)
+      u8g2_SetDrawColor(display_getU8g2Ref(), 1);
+      break;
     case 'H':  // Cursor home
       cursorX = 0;
       cursorY = 0;
@@ -427,7 +450,7 @@ void term_printString(const char *str) {
 
 // Called whenever a character is entered by the user
 // This is the single point of entry for user input
-static void termInputChar(char chr) {
+static void termInputChar(char chr, bool shiftKey) {
   // Check for backspace
   if (chr == '\b') {
     display_termChar(prevCursorX, prevCursorY, ' ');
@@ -460,56 +483,77 @@ static void termInputChar(char chr) {
     return;
   }
 
-  // If it's newline or carriage return, finalize the line
-  if (chr == '\n' || chr == '\r') {
-    // Render newline on screen
-    termRenderChar('\n');
-
-    // Process input_buffer
-    // Split the input into command and argument
-    char command[TERM_INPUT_BUFFER_SIZE] = {0};
-    char arg[TERM_INPUT_BUFFER_SIZE] = {0};
-    sscanf(inputBuffer, "%63s %63[^\n]", command,
-           arg);  // Split at the first space
-
-    bool commandFound = false;
-    for (size_t i = 0; i < numCommands; i++) {
-      if (strcmp(command, commands[i].command) == 0) {
-        commands[i].handler(arg);  // Pass the argument to the handler
-        commandFound = true;
-      }
-    }
-    if ((!commandFound) && (strlen(command) > 0)) {
-      // The custom unknown command manager is called when the command is empty
-      // in the command table. This is useful to manage custom entries.
+  switch (commandLevel) {
+    case TERM_COMMAND_LEVEL_SINGLE_KEY: {
+      // One keystroke = one command (the menu). Case-fold by the shift key.
+      chr = shiftKey ? (char)toupper((unsigned char)chr)
+                     : (char)tolower((unsigned char)chr);
       for (size_t i = 0; i < numCommands; i++) {
-        if (strlen(commands[i].command) == 0) {
-          commands[i].handler(inputBuffer);  // Pass the argument to the handler
+        if (chr == commands[i].command[0]) {
+          lastSingleKeyCommand = chr;
+          commands[i].handler(NULL);
+          break;
         }
       }
+      memset(inputBuffer, 0, TERM_INPUT_BUFFER_SIZE);
+      inputLength = 0;
+      display_termRefresh();
+      return;
     }
-
-    // Reset input buffer
-    memset(inputBuffer, 0, TERM_INPUT_BUFFER_SIZE);
-    inputLength = 0;
-
-    term_printString("> ");
-    display_termRefresh();
-    return;
+    case TERM_COMMAND_LEVEL_DATA_INPUT: {
+      // Collect a typed value; on Enter re-invoke the command that opened it.
+      if (chr == '\n' || chr == '\r') {
+        termRenderChar('\n');
+        for (size_t i = 0; i < numCommands; i++) {
+          if (lastSingleKeyCommand == commands[i].command[0]) {
+            commands[i].handler(inputBuffer);
+            break;
+          }
+        }
+        return;
+      }
+      break;  // otherwise fall through to append the character
+    }
+    case TERM_COMMAND_LEVEL_COMMAND_INPUT:
+    default: {
+      // Classic "command arg" line, finalized on Enter.
+      if (chr == '\n' || chr == '\r') {
+        termRenderChar('\n');
+        char command[TERM_INPUT_BUFFER_SIZE] = {0};
+        char arg[TERM_INPUT_BUFFER_SIZE] = {0};
+        sscanf(inputBuffer, "%63s %63[^\n]", command,
+               arg);  // Split at the first space
+        bool commandFound = false;
+        for (size_t i = 0; i < numCommands; i++) {
+          if (strcmp(command, commands[i].command) == 0) {
+            commands[i].handler(arg);  // Pass the argument to the handler
+            commandFound = true;
+          }
+        }
+        if ((!commandFound) && (strlen(command) > 0)) {
+          // The custom unknown command manager is called when the command is
+          // empty in the command table (useful for custom entries).
+          for (size_t i = 0; i < numCommands; i++) {
+            if (strlen(commands[i].command) == 0) {
+              commands[i].handler(inputBuffer);
+            }
+          }
+        }
+        memset(inputBuffer, 0, TERM_INPUT_BUFFER_SIZE);
+        inputLength = 0;
+        term_printString("> ");
+        display_termRefresh();
+        return;
+      }
+      break;  // otherwise fall through to append the character
+    }
   }
 
-  // If it's a normal character
-  // Add it to input_buffer if there's space
+  // Normal character: append to the input buffer if there's space.
   if (inputLength < TERM_INPUT_BUFFER_SIZE - 1) {
     inputBuffer[inputLength++] = chr;
-    // Render char on screen
     termRenderChar(chr);
-
-    // show block cursor
-
     display_termRefresh();
-  } else {
-    // Buffer full, ignore or beep?
   }
 }
 
@@ -616,7 +660,7 @@ void __not_in_flash_func(term_loop)() {
         display_termStart(DISPLAY_TILES_WIDTH, DISPLAY_TILES_HEIGHT);
         term_clearScreen();
         term_printString("Type 'help' for available commands.\n");
-        termInputChar('\n');
+        termInputChar('\n', false);
         SEND_COMMAND_TO_DISPLAY(DISPLAY_COMMAND_TERM);
         DPRINTF("Send command to display: DISPLAY_COMMAND_TERM\n");
       } break;
@@ -644,7 +688,8 @@ void __not_in_flash_func(term_loop)() {
           DPRINTF("Keystroke: %d. Shift key: %d, Scan code: %d\n", keystroke,
                   shiftKey, scanCode);
         }
-        termInputChar(keystroke);
+        keystrokeSeq++;  // any key — used by emul.c to stop the boot countdown
+        termInputChar(keystroke, shiftKey != 0);
         break;
       }
       default:
@@ -704,15 +749,6 @@ void term_printNetworkInfo(void) {
   snprintf(sdStatus, sizeof(sdStatus), "Not mounted");
   snprintf(sdSpace, sizeof(sdSpace), "N/A");
 
-  uint32_t sdTotalMb = 0;
-  uint32_t sdFreeMb = 0;
-  if (sdcard_getMountedInfo(&sdTotalMb, &sdFreeMb)) {
-    snprintf(sdStatus, sizeof(sdStatus), "Mounted");
-    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB free",
-             (unsigned long)sdFreeMb, (unsigned long)sdTotalMb);
-  } else if (sdcard_isMounted()) {
-    snprintf(sdStatus, sizeof(sdStatus), "Error");
-  }
 
   term_printString("Network status: ");
 
@@ -895,15 +931,6 @@ static bool term_buildLiveMenuLines(char *ssidLine, size_t ssidLineSize,
   snprintf(sdStatus, sizeof(sdStatus), "Not mounted");
   snprintf(sdSpace, sizeof(sdSpace), "N/A");
 
-  uint32_t sdTotalMb = 0;
-  uint32_t sdFreeMb = 0;
-  if (sdcard_getMountedInfo(&sdTotalMb, &sdFreeMb)) {
-    snprintf(sdStatus, sizeof(sdStatus), "Mounted");
-    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB free",
-             (unsigned long)sdFreeMb, (unsigned long)sdTotalMb);
-  } else if (sdcard_isMounted()) {
-    snprintf(sdStatus, sizeof(sdStatus), "Error");
-  }
 
 #if defined(CYW43_WL_GPIO_LED_PIN)
   ip_addr_t currentIp = network_getCurrentIp();
@@ -995,100 +1022,7 @@ void term_refreshMenuLiveInfo(void) {
   term_printString(updateBuffer);
 }
 
-static bool term_parseKeyAndTail(const char *arg, char *key, size_t keySize,
-                                 const char **tail) {
-  if ((arg == NULL) || (key == NULL) || (keySize == 0)) {
-    return false;
-  }
-
-  while (isspace((unsigned char)*arg)) {
-    arg++;
-  }
-  if (*arg == '\0') {
-    return false;
-  }
-
-  const char *end = arg;
-  while ((*end != '\0') && !isspace((unsigned char)*end)) {
-    end++;
-  }
-
-  size_t keyLen = (size_t)(end - arg);
-  if ((keyLen == 0) || (keyLen >= keySize)) {
-    return false;
-  }
-
-  memcpy(key, arg, keyLen);
-  key[keyLen] = '\0';
-
-  while (isspace((unsigned char)*end)) {
-    end++;
-  }
-
-  if (tail != NULL) {
-    *tail = end;
-  }
-  return true;
-}
-
-static bool term_parseBoolToken(const char *valueToken, bool *value) {
-  if ((valueToken == NULL) || (value == NULL)) {
-    return false;
-  }
-
-  char valueStr[TERM_BOOL_INPUT_BUFF] = {0};
-  size_t valueLen = strcspn(valueToken, " \t\r\n");
-  if ((valueLen == 0) || (valueLen >= sizeof(valueStr))) {
-    return false;
-  }
-  memcpy(valueStr, valueToken, valueLen);
-  valueStr[valueLen] = '\0';
-
-  for (size_t i = 0; valueStr[i] != '\0'; i++) {
-    valueStr[i] = (char)tolower((unsigned char)valueStr[i]);
-  }
-
-  if ((strcmp(valueStr, "true") == 0) || (strcmp(valueStr, "t") == 0) ||
-      (strcmp(valueStr, "1") == 0)) {
-    *value = true;
-    return true;
-  }
-  if ((strcmp(valueStr, "false") == 0) || (strcmp(valueStr, "f") == 0) ||
-      (strcmp(valueStr, "0") == 0)) {
-    *value = false;
-    return true;
-  }
-
-  return false;
-}
-
 // Command handlers
-void term_cmdSettings(const char *arg) {
-  term_printString(
-      "\x1B"
-      "E"
-      "Available settings commands:\n");
-  term_printString("  print   - Show settings\n");
-  term_printString("  save    - Save settings\n");
-  term_printString("  erase   - Erase settings\n");
-  term_printString("  get     - Get setting (requires key)\n");
-  term_printString("  put_int - Set integer (key and value)\n");
-  term_printString("  put_bool- Set boolean (key and value)\n");
-  term_printString("  put_str - Set string (key and value)\n");
-  term_printString("\nEnter 'm' to return to the main menu.\n\n");
-}
-
-void term_cmdPrint(const char *arg) {
-  char *buffer = (char *)malloc(TERM_PRINT_SETTINGS_BUFFER_SIZE);
-  if (buffer == NULL) {
-    term_printString("Error: Out of memory.\n");
-    return;
-  }
-  settings_print(aconfig_getContext(), buffer);
-  term_printString(buffer);
-  free(buffer);
-}
-
 void term_cmdClear(const char *arg) { term_clearScreen(); }
 
 void term_cmdExit(const char *arg) {
@@ -1101,112 +1035,3 @@ void term_cmdUnknown(const char *arg) {
   TPRINTF("Unknown command. Type 'help' for a list of commands.\n");
 }
 
-void term_cmdSave(const char *arg) {
-  settings_save(aconfig_getContext(), true);
-  term_printString("Settings saved.\n");
-}
-
-void term_cmdErase(const char *arg) {
-  settings_erase(aconfig_getContext());
-  term_printString("Settings erased.\n");
-}
-
-void term_cmdGet(const char *arg) {
-  if (arg && strlen(arg) > 0) {
-    SettingsConfigEntry *entry =
-        settings_find_entry(aconfig_getContext(), &arg[0]);
-    if (entry != NULL) {
-      TPRINTF("Key: %s\n", entry->key);
-      TPRINTF("Type: ");
-      switch (entry->dataType) {
-        case SETTINGS_TYPE_INT:
-          TPRINTF("INT");
-          break;
-        case SETTINGS_TYPE_STRING:
-          TPRINTF("STRING");
-          break;
-        case SETTINGS_TYPE_BOOL:
-          TPRINTF("BOOL");
-          break;
-        default:
-          TPRINTF("UNKNOWN");
-          break;
-      }
-      TPRINTF("\n");
-      TPRINTF("Value: %s\n", entry->value);
-    } else {
-      TPRINTF("Key not found.\n");
-    }
-  } else {
-    TPRINTF("No key provided for 'get' command.\n");
-  }
-}
-
-void term_cmdPutInt(const char *arg) {
-  char key[SETTINGS_MAX_KEY_LENGTH] = {0};
-  const char *valueStr = NULL;
-  if (term_parseKeyAndTail(arg, key, sizeof(key), &valueStr) &&
-      (valueStr != NULL) && (valueStr[0] != '\0')) {
-    char *endPtr = NULL;
-    long parsedValue = strtol(valueStr, &endPtr, DEC_BASE);
-    while ((endPtr != NULL) && isspace((unsigned char)*endPtr)) {
-      endPtr++;
-    }
-    if ((endPtr == valueStr) || ((endPtr != NULL) && (*endPtr != '\0')) ||
-        (parsedValue < INT_MIN) || (parsedValue > INT_MAX)) {
-      TPRINTF("Invalid arguments for 'put_int' command.\n");
-      return;
-    }
-
-    int value = (int)parsedValue;
-    int err = settings_put_integer(aconfig_getContext(), key, value);
-    if (err == 0) {
-      TPRINTF("Key: %s\n", key);
-      TPRINTF("Value: %d\n", value);
-    } else {
-      TPRINTF("Error setting integer value for key: %s\n", key);
-    }
-  } else {
-    TPRINTF("Invalid arguments for 'put_int' command.\n");
-  }
-}
-
-void term_cmdPutBool(const char *arg) {
-  char key[SETTINGS_MAX_KEY_LENGTH] = {0};
-  const char *valueToken = NULL;
-  bool value = false;
-
-  if (term_parseKeyAndTail(arg, key, sizeof(key), &valueToken) &&
-      (valueToken != NULL) && term_parseBoolToken(valueToken, &value)) {
-    // Store the boolean value
-    int err = settings_put_bool(aconfig_getContext(), key, value);
-    if (err == 0) {
-      TPRINTF("Key: %s\n", key);
-      TPRINTF("Value: %s\n", value ? "true" : "false");
-    } else {
-      TPRINTF("Error setting boolean value for key: %s\n", key);
-    }
-  } else {
-    TPRINTF(
-        "Invalid arguments for 'put_bool' command. Usage: put_bool <key> "
-        "<true/false>\n");
-  }
-}
-
-void term_cmdPutString(const char *arg) {
-  char key[SETTINGS_MAX_KEY_LENGTH] = {0};
-  const char *value = NULL;
-
-  if (term_parseKeyAndTail(arg, key, sizeof(key), &value)) {
-    const char *safeValue = (value != NULL) ? value : "";
-    int err = settings_put_string(aconfig_getContext(), key, safeValue);
-    if (err == 0) {
-      TPRINTF("Key: %s\n", key);
-      TPRINTF("Value: %s\n", (safeValue[0] != '\0') ? safeValue : "<EMPTY>");
-    } else {
-      TPRINTF("Error setting string value for key: %s\n", key);
-    }
-  } else {
-    TPRINTF("Invalid arguments for 'put_string' command.\n");
-  }
-}

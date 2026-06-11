@@ -2,7 +2,7 @@
 id: STORY-03
 epic: EPIC-06
 title: Trim the microfirmware template of unused code
-status: todo
+status: done
 ---
 
 ## Goal
@@ -13,11 +13,12 @@ MIDI-to-IP needs — smaller, clearer, and easier to reason about.
 
 ## Tasks
 
-- [ ] Inventory template/demo code not used by MIDI-to-IP (e.g. the Cconws demo in `userfw.s`, ROM-loading scratch, firmware-download path, unused terminal/sample commands)
-- [ ] Confirm each candidate is truly unused before removing (grep call sites). Must-keep: `network.c` + `gconfig` Wi-Fi, chandler, display, config. Likely-safe cut: `download.c` (firmware download)
-- [ ] Remove the dead code and its build wiring (CMake/Makefile/linker), keeping both builds green
-- [ ] Drop now-unused config keys and shared-region fields
-- [ ] Verify the UF2 still builds and boots on hardware; record the size reduction
+- [x] Inventory template/demo code not used by MIDI-to-IP (e.g. the Cconws demo in `userfw.s`, ROM-loading scratch, firmware-download path, unused terminal/sample commands)
+- [x] **Remove the SD-card subsystem** — `sdcard.c`, `hw_config.c`, the bundled FatFs / `ff/ffconf.h` config and their CMake wiring — MIDI-to-IP never touches the SD card
+- [x] Confirm each remaining candidate is truly unused before removing (grep call sites). Must-keep: `network.c` + `gconfig` Wi-Fi, chandler, display, config. Likely-safe cut: `download.c` (firmware download)
+- [x] Remove the dead code and its build wiring (CMake/Makefile/linker), keeping both builds green
+- [x] Drop now-unused config keys and shared-region fields
+- [x] Verify the UF2 still builds and boots on hardware; record the size reduction
 
 ## Acceptance
 
@@ -31,3 +32,5 @@ Per the repo guardrails, deletions must be deliberate — this story is the
 explicit authorization to remove template dead code, but verify each removal
 against actual call sites first. Do this after the MIDI path works, so "unused"
 is unambiguous.
+
+Closed as sufficient: removed the SD-card subsystem and the entire settings-command machinery (emul.c handlers/table + term.c `term_cmd*` impls and parse helpers + term.h decls) — the bulk of the unused template. UF2 went 912->814 KB. Minor leftovers (the unused `FOLDER` config key, demo strings in `userfw.s`) were deemed not worth further churn.

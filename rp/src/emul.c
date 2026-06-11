@@ -9,6 +9,9 @@
 #include "emul.h"
 
 #include <stdint.h>
+#include <stdio.h>   // snprintf
+#include <stdlib.h>  // strtol
+#include <string.h>  // strcmp
 
 // inclusw in the C file to avoid multiple definitions
 #include "aconfig.h"
@@ -17,7 +20,7 @@
 #include "constants.h"
 #include "debug.h"
 #include "display.h"
-#include "ff.h"
+#include "display_term.h"  // DISPLAY_TERM_CHAR_HEIGHT (countdown bar)
 #include "gconfig.h"
 #include "memfunc.h"
 #include "midi.h"
@@ -25,7 +28,6 @@
 #include "pico/stdlib.h"
 #include "reset.h"
 #include "romemul.h"
-#include "sdcard.h"
 #include "select.h"
 #include "target_firmware.h"  // Include the target firmware binary
 #include "term.h"
@@ -45,37 +47,22 @@ enum {
 // Command handlers
 static void cmdMenu(const char *arg);
 static void cmdClear(const char *arg);
-static void cmdExit(const char *arg);
 static void cmdFirmware(const char *arg);
 static void cmdHelp(const char *arg);
 static void cmdBooster(const char *arg);
-static void cmdSettings(const char *arg);
-static void cmdPrint(const char *arg);
-static void cmdSave(const char *arg);
-static void cmdErase(const char *arg);
-static void cmdGet(const char *arg);
-static void cmdPutInt(const char *arg);
-static void cmdPutBool(const char *arg);
-static void cmdPutString(const char *arg);
 static void cmdPing(const char *arg);
+static void cmdHost(const char *arg);
+static void cmdPort(const char *arg);
 
 // Command table
 static const Command commands[] = {
     {"m", cmdMenu},
-    {"h", cmdHelp},
-    {"e", cmdExit},
+    {"h", cmdHost},
+    {"p", cmdPort},
+    {"e", cmdFirmware},
     {"f", cmdFirmware},
     {"x", cmdBooster},
     {"?", cmdHelp},
-    {"s", cmdSettings},
-    {"settings", cmdSettings},
-    {"print", cmdPrint},
-    {"save", cmdSave},
-    {"erase", cmdErase},
-    {"get", cmdGet},
-    {"put_int", cmdPutInt},
-    {"put_bool", cmdPutBool},
-    {"put_str", cmdPutString},
     {"ping", cmdPing},
 };
 
@@ -86,6 +73,18 @@ static const size_t numCommands = sizeof(commands) / sizeof(commands[0]);
 static bool keepActive = true;
 static bool menuScreenActive = false;
 static absolute_time_t menuRefreshTime;
+
+// Boot countdown (EPIC-06 STORY-02, md-drives-emulator style): the menu
+// auto-launches the firmware after BOOT_COUNTDOWN_SECS unless a key is pressed.
+// It renders in the bottom info bar (showCounter); ANY keystroke halts it,
+// detected via term's keystroke seq.
+#define BOOT_COUNTDOWN_SECS 10
+static bool haltCountdown = true;
+static int countdown = 0;
+static absolute_time_t lastDecrement;
+static uint32_t countdownStartSeq = 0;
+// STORY-05: last displayed status signature — re-render the menu only on change.
+static char lastStatusSig[96] = {0};
 
 // Polling tick used as the network poll callback so command handling stays
 // alive during multi-second WiFi operations.
@@ -103,22 +102,85 @@ static bool resetDeviceAtBoot = true;
 static void showTitle() {
   term_printString(
       "\x1B"
-      "E"
-      "Microfirmware test app - " RELEASE_VERSION "\n");
+      "E"  // clear screen + home
+      "\x1B"
+      "p"  // reverse video on — inverted title bar (md-drives-emulator style)
+      "MIDI-to-IP - " RELEASE_VERSION "\n"
+      "\x1B"
+      "q");  // reverse video off
+}
+
+// Bottom info bar (md-drives-emulator style): an inverted full-width box on the
+// last text row, drawn in the small squeezed font, then restore the term font.
+static void drawSetupInfoLine(const char *message) {
+  u8g2_t *u8g2 = display_getU8g2Ref();
+  u8g2_SetDrawColor(u8g2, 1);
+  u8g2_DrawBox(u8g2, 0, DISPLAY_HEIGHT - DISPLAY_TERM_CHAR_HEIGHT, DISPLAY_WIDTH,
+               DISPLAY_TERM_CHAR_HEIGHT);
+  u8g2_SetFont(u8g2, u8g2_font_squeezed_b7_tr);
+  u8g2_SetDrawColor(u8g2, 0);
+  u8g2_DrawStr(u8g2, 0, DISPLAY_HEIGHT - 1, (message != NULL) ? message : "");
+  u8g2_SetDrawColor(u8g2, 1);
+  u8g2_SetFont(u8g2, u8g2_font_amstrad_cpc_extended_8f);
+}
+
+// Render the boot countdown into the bottom bar.
+static void showCounter(int cdown) {
+  char msg[64];
+  if (cdown > 0) {
+    snprintf(msg, sizeof(msg),
+             "Starting firmware in %d s...   [E]xit now   [X] Booster", cdown);
+  } else {
+    snprintf(msg, sizeof(msg), "Starting firmware...");
+  }
+  drawSetupInfoLine(msg);
+}
+
+// EPIC-06 STORY-05: the only on-screen status we keep — Wi-Fi link, local IP,
+// and the orchestrator connection (everything else from term_printNetworkInfo
+// is dropped).
+static void printMinimalStatus(void) {
+  ip_addr_t ip = network_getCurrentIp();
+  term_printString("  Wi-Fi  : ");
+  term_printString(network_wifiConnStatusStr());
+  term_printString("\n  IP     : ");
+  term_printString(ip_addr_isany_val(ip) ? "-" : ipaddr_ntoa(&ip));
+  term_printString("\n  Server : ");
+  term_printString(midi_net_status_str());
+  term_printString("\n");
+}
+
+// Signature of the displayed status — the menu only re-renders when it changes.
+static void statusSignature(char *buf, size_t len) {
+  ip_addr_t ip = network_getCurrentIp();
+  snprintf(buf, len, "%s|%s|%s", network_wifiConnStatusStr(),
+           ip_addr_isany_val(ip) ? "-" : ipaddr_ntoa(&ip), midi_net_status_str());
 }
 
 static void menu(void) {
   menuScreenActive = true;
+  term_setCommandLevel(TERM_COMMAND_LEVEL_SINGLE_KEY);  // single-key menu
   showTitle();
-  term_printString("\n\n");
-  term_printString("[S]ettings     | [F]irmware launch\n");
-  term_printString("[E]xit desktop | [X] Back to Booster\n\n");
-
-  // Display network information
-  term_printNetworkInfo();
-
   term_printString("\n");
-  term_printString("Select an option: ");
+
+  // Orchestrator endpoint (EPIC-06 STORY-04) — current values from aconfig.
+  SettingsConfigEntry *cfgHost =
+      settings_find_entry(aconfig_getContext(), MIDI_CFG_HOST);
+  SettingsConfigEntry *cfgPort =
+      settings_find_entry(aconfig_getContext(), MIDI_CFG_PORT);
+  term_printString("Orchestrator\n");
+  term_printString("  [H]ost : ");
+  term_printString((cfgHost != NULL) ? cfgHost->value : "-");
+  term_printString("\n  [P]ort : ");
+  term_printString((cfgPort != NULL) ? cfgPort->value : "-");
+  term_printString("\n\n");
+
+  // Status: Wi-Fi, local IP, orchestrator (EPIC-06 STORY-05)
+  term_printString("Status\n");
+  printMinimalStatus();
+  term_printString("\n");
+
+  term_printString("[E]xit to GEM     [X] Booster\n");
   term_markMenuPromptCursor();
   menuRefreshTime = make_timeout_time_ms(MENU_REFRESH_TIME_MS);
 }
@@ -149,21 +211,64 @@ void cmdPing(const char *arg) {
   term_printString("\n");
 }
 
+// EPIC-06 STORY-04: edit the orchestrator host. First press (SINGLE_KEY) prompts
+// and switches to DATA_INPUT; the typed value re-invokes this on Enter, then it
+// validates and persists to aconfig (CONFIG_FLASH).
+void cmdHost(const char *arg) {
+  (void)arg;
+  if (term_getCommandLevel() == TERM_COMMAND_LEVEL_SINGLE_KEY) {
+    menuScreenActive = false;
+    showTitle();
+    term_printString("\n\nOrchestrator host (IP or hostname): ");
+    term_setCommandLevel(TERM_COMMAND_LEVEL_DATA_INPUT);
+    return;
+  }
+  term_setCommandLevel(TERM_COMMAND_LEVEL_SINGLE_KEY);
+  const char *input = term_getInputBuffer();
+  if (input[0] != '\0') {
+    settings_put_string(aconfig_getContext(), MIDI_CFG_HOST, input);
+    settings_save(aconfig_getContext(), true);
+    midi_net_reload();  // apply live: drop + reconnect to the new endpoint
+  }
+  term_clearInputBuffer();
+  menu();
+}
+
+// EPIC-06 STORY-04: edit the orchestrator port (1..65535), same DATA_INPUT flow.
+void cmdPort(const char *arg) {
+  (void)arg;
+  if (term_getCommandLevel() == TERM_COMMAND_LEVEL_SINGLE_KEY) {
+    menuScreenActive = false;
+    showTitle();
+    term_printString("\n\nOrchestrator port (1-65535): ");
+    term_setCommandLevel(TERM_COMMAND_LEVEL_DATA_INPUT);
+    return;
+  }
+  term_setCommandLevel(TERM_COMMAND_LEVEL_SINGLE_KEY);
+  const char *input = term_getInputBuffer();
+  char *endptr = NULL;
+  long port = strtol(input, &endptr, 10);
+  if (input[0] != '\0' && *endptr == '\0' && port >= 1 && port <= 65535) {
+    settings_put_integer(aconfig_getContext(), MIDI_CFG_PORT, (int)port);
+    settings_save(aconfig_getContext(), true);
+    midi_net_reload();  // apply live: drop + reconnect to the new endpoint
+  } else if (input[0] != '\0') {
+    term_printString("Invalid port (must be 1-65535).\n");
+  }
+  term_clearInputBuffer();
+  menu();
+}
+
 void cmdClear(const char *arg) {
   menuScreenActive = false;
   term_clearScreen();
 }
 
-void cmdExit(const char *arg) {
-  menuScreenActive = false;
-  term_printString("Exiting terminal...\n");
-  // Send continue to desktop command
-  SEND_COMMAND_TO_DISPLAY(DISPLAY_COMMAND_CONTINUE);
-}
-
 void cmdFirmware(const char *arg) {
   menuScreenActive = false;
-  term_printString("Launching user firmware on the Atari ST...\n");
+  showTitle();  // clear the screen first
+  term_printString("\nExiting to GEM with MIDI-to-IP active...\n");
+  display_refresh();
   // Write CMD_START into the cartridge sentinel slot. The m68k's
   // check_commands macro polls the slot every vsync; on CMD_START it
   // beq's into rom_function, which jmp's to USERFW (target/atarist/src/
@@ -174,51 +279,13 @@ void cmdFirmware(const char *arg) {
 
 void cmdBooster(const char *arg) {
   menuScreenActive = false;
-  term_printString("Launching Booster app...\n");
+  showTitle();  // clear the screen first
+  term_printString("\nLaunching Booster app...\n");
   term_printString("The computer will boot shortly...\n\n");
   term_printString("If it doesn't boot, power it on and off.\n");
+  display_refresh();
   resetDeviceAtBoot = false;  // Jump to the booster app
   keepActive = false;         // Exit the active loop
-}
-
-void cmdSettings(const char *arg) {
-  menuScreenActive = false;
-  term_cmdSettings(arg);
-}
-
-void cmdPrint(const char *arg) {
-  menuScreenActive = false;
-  term_cmdPrint(arg);
-}
-
-void cmdSave(const char *arg) {
-  menuScreenActive = false;
-  term_cmdSave(arg);
-}
-
-void cmdErase(const char *arg) {
-  menuScreenActive = false;
-  term_cmdErase(arg);
-}
-
-void cmdGet(const char *arg) {
-  menuScreenActive = false;
-  term_cmdGet(arg);
-}
-
-void cmdPutInt(const char *arg) {
-  menuScreenActive = false;
-  term_cmdPutInt(arg);
-}
-
-void cmdPutBool(const char *arg) {
-  menuScreenActive = false;
-  term_cmdPutBool(arg);
-}
-
-void cmdPutString(const char *arg) {
-  menuScreenActive = false;
-  term_cmdPutString(arg);
 }
 
 // This section contains the functions that are called from the main loop
@@ -264,8 +331,15 @@ static void init(void) {
   // Clear the screen
   term_clearScreen();
 
-  // Display the menu
+  // Display the boot menu with the auto-launch countdown (EPIC-06 STORY-02)
+  countdown = BOOT_COUNTDOWN_SECS;
+  lastDecrement = get_absolute_time();
+  countdownStartSeq = term_getKeystrokeSeq();
+  haltCountdown = false;
   menu();
+  showCounter(countdown);  // initial countdown bar
+  display_refresh();
+  statusSignature(lastStatusSig, sizeof(lastStatusSig));  // seed change detection
 
   // Example 1: Move the cursor up one line.
   // VT52 sequence: ESC A (moves cursor up)
@@ -392,23 +466,8 @@ void emul_start() {
   // files are stored. The folder name is defined in the configuration.
   // If there is no folder in the micro SD card, the app will create it.
 
-  FATFS fsys;
-  SettingsConfigEntry *folder =
-      settings_find_entry(aconfig_getContext(), ACONFIG_PARAM_FOLDER);
-  char *folderName = "/test";  // MODIFY THIS TO YOUR FOLDER NAME
-  if (folder == NULL) {
-    DPRINTF("FOLDER not found in the configuration. Using default value\n");
-  } else {
-    DPRINTF("FOLDER: %s\n", folder->value);
-    folderName = folder->value;
-  }
-  int sdcardErr = sdcard_initFilesystem(&fsys, folderName);
-  if (sdcardErr != SDCARD_INIT_OK) {
-    DPRINTF("SD card unavailable (error %i). Continuing without SD.\n",
-            sdcardErr);
-  } else {
-    DPRINTF("SD card found & initialized\n");
-  }
+  // No SD card: MIDI-to-IP doesn't use it — the SD/FatFs subsystem was removed
+  // (EPIC-06 STORY-03).
 
   // Initialize the display again (in case the terminal emulator changed it)
   display_setupU8g2();
@@ -511,13 +570,51 @@ void emul_start() {
       nextNetPoll = make_timeout_time_ms(NET_POLL_MS);
     }
 
-    if (menuScreenActive) {
+    // Boot countdown (md-drives-emulator style): ANY keystroke halts it; while
+    // running it updates only the bottom bar (no menu redraw); on expiry it
+    // auto-launches the firmware (EPIC-06 STORY-02).
+    if (!haltCountdown && term_getKeystrokeSeq() != countdownStartSeq) {
+      haltCountdown = true;
+      if (menuScreenActive) {
+        drawSetupInfoLine("Countdown stopped.");
+        display_refresh();
+      }
+    }
+    if (menuScreenActive && !haltCountdown) {
+      if (absolute_time_diff_us(lastDecrement, get_absolute_time()) >= 1000000) {
+        lastDecrement = get_absolute_time();
+        countdown--;
+        if (countdown <= 0) {
+          haltCountdown = true;
+          cmdFirmware(NULL);  // auto-launch firmware on countdown expiry
+        } else {
+          // Live status during the countdown: re-render the menu body when it
+          // changes, then redraw the countdown bar (EPIC-06 STORY-05).
+          char sig[96];
+          statusSignature(sig, sizeof(sig));
+          if (strcmp(sig, lastStatusSig) != 0) {
+            snprintf(lastStatusSig, sizeof(lastStatusSig), "%s", sig);
+            menu();
+          }
+          showCounter(countdown);
+          display_refresh();
+        }
+      }
+    } else if (menuScreenActive) {
       char *input = term_getInputBuffer();
       bool hasPendingInput = (input != NULL) && (input[0] != '\0');
       if (!hasPendingInput &&
           (absolute_time_diff_us(get_absolute_time(), menuRefreshTime) <= 0)) {
-        term_refreshMenuLiveInfo();
-        menuRefreshTime = make_timeout_time_ms(MENU_REFRESH_TIME_MS);
+        // STORY-05: re-render only when the live status actually changes.
+        char sig[96];
+        statusSignature(sig, sizeof(sig));
+        if (strcmp(sig, lastStatusSig) != 0) {
+          snprintf(lastStatusSig, sizeof(lastStatusSig), "%s", sig);
+          menu();
+          display_refresh();
+        } else {
+          menuRefreshTime = make_timeout_time_ms(MENU_REFRESH_TIME_MS);
+        }
       }
     }
   }

@@ -1,9 +1,14 @@
 #include "include/aconfig.h"
 
-// We don't have any variables because this is the placeholder app
+#include "include/midi.h"  // MIDI_CFG_* keys + defaults (EPIC-06 STORY-01)
+
 static SettingsConfigEntry defaultEntries[] = {
     {ACONFIG_PARAM_FOLDER, SETTINGS_TYPE_STRING, "/test"},
     {ACONFIG_PARAM_MODE, SETTINGS_TYPE_INT, "255"},  // 255: Menu mode
+    // MIDI-to-IP orchestrator endpoint (EPIC-06 STORY-01)
+    {MIDI_CFG_HOST, SETTINGS_TYPE_STRING, MIDI_DEFAULT_HOST},
+    {MIDI_CFG_PORT, SETTINGS_TYPE_INT, "5005"},
+    {MIDI_CFG_ENABLED, SETTINGS_TYPE_BOOL, "true"},
 };
 
 // Create a global context for our settings

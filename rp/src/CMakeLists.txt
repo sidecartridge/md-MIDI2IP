@@ -43,18 +43,8 @@ endif()
 # Resolve bundled Pico dependencies relative to the repo root so configure
 # works regardless of the active build directory.
 get_filename_component(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." REALPATH)
-set(DEFAULT_FATFS_SDK_PATH "${REPO_ROOT}/fatfs-sdk")
 set(DEFAULT_PICO_SDK_PATH "${REPO_ROOT}/pico-sdk")
 set(DEFAULT_PICO_EXTRAS_PATH "${REPO_ROOT}/pico-extras")
-
-if(NOT DEFINED ENV{FATFS_SDK_PATH} OR "$ENV{FATFS_SDK_PATH}" STREQUAL "")
-    set(ENV{FATFS_SDK_PATH} "${DEFAULT_FATFS_SDK_PATH}")
-endif()
-set(FATFS_SDK_PATH "$ENV{FATFS_SDK_PATH}" CACHE PATH "Path to the FATFS SDK" FORCE)
-get_filename_component(FATFS_SDK_PATH "${FATFS_SDK_PATH}" REALPATH BASE_DIR "${CMAKE_CURRENT_LIST_DIR}")
-set(FATFS_SDK_PATH "${FATFS_SDK_PATH}" CACHE PATH "Path to the FATFS SDK" FORCE)
-set(ENV{FATFS_SDK_PATH} "${FATFS_SDK_PATH}")
-message("FATFS_SDK_PATH: ${FATFS_SDK_PATH}")
 
 if(NOT DEFINED ENV{PICO_SDK_PATH} OR "$ENV{PICO_SDK_PATH}" STREQUAL "")
     set(ENV{PICO_SDK_PATH} "${DEFAULT_PICO_SDK_PATH}")
@@ -89,9 +79,6 @@ add_subdirectory(settings)
 # Add u8g2 library
 add_subdirectory(u8g2)
 
-# Tell CMake where to find other source code
-add_subdirectory(${FATFS_SDK_PATH}/src build)
-  
 # Tell CMake where to find the executable source file
 add_executable(${PROJECT_NAME} 
         main.c
@@ -109,12 +96,10 @@ target_sources(${PROJECT_NAME} PRIVATE
         display_term.c
         emul.c
         gconfig.c
-        hw_config.c
         midi.c
         network.c
         reset.c
         romemul.c
-        sdcard.c
         select.c
         term.c
         tprotocol.c
@@ -127,7 +112,6 @@ pico_add_extra_outputs(${PROJECT_NAME})
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${LINK_LIBRARIES}        # External or additional libraries passed as variables
     hardware_flash           # Flash memory access
-    no-OS-FatFS-SD-SDIO-SPI-RPi-Pico                # FATFS library   
     pico_stdlib              # Core functionality
     pico_multicore          # Multicore support
     settings                 # Custom settings library
@@ -148,14 +132,6 @@ endif()
 set_target_properties(${PROJECT_NAME} PROPERTIES
         PICO_TARGET_LINKER_SCRIPT ${CMAKE_CURRENT_LIST_DIR}/memmap_rp.ld
 )
-
-# Make our project-local FatFs config (rp/src/ff/ffconf.h) win over the
-# fatfs-sdk submodule's default copy. fatfs sources do `#include "ffconf.h"`
-# which is resolved against the include path; placing this BEFORE PRIVATE
-# guarantees our override is found first, so the submodule stays pristine
-# and no on-the-fly sed patching is needed.
-target_include_directories(${PROJECT_NAME} BEFORE PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}/ff)
 
 # Needed to include lwipopts.h properly
 target_include_directories(${PROJECT_NAME} PRIVATE

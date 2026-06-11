@@ -38,6 +38,13 @@
 #define MIDI_IN_COUNT_OFFSET CHANDLER_APP_FREE_OFFSET         // longword: RP queue depth (Bconstat)
 #define MIDI_IN_BUFFER_OFFSET (CHANDLER_APP_FREE_OFFSET + 4)  // longword: one popped byte (Bconin)
 
+// --- Per-app config keys (EPIC-06 STORY-01) — stored in aconfig / CONFIG_FLASH ---
+#define MIDI_CFG_HOST "MIDI_HOST"        // string: orchestrator host (IP for now)
+#define MIDI_CFG_PORT "MIDI_PORT"        // int: orchestrator TCP port
+#define MIDI_CFG_ENABLED "MIDI_ENABLED"  // bool: connect to the orchestrator
+#define MIDI_DEFAULT_HOST "0.0.0.0"      // placeholder until set (STORY-04)
+#define MIDI_DEFAULT_PORT 5005
+
 // Register the MIDI command handler with chandler and initialise the shared
 // IN count to 0. Call once during emul_start(), after chandler_init() and the
 // firmware image is copied to RAM.
@@ -46,6 +53,10 @@ void midi_init(void);
 // EPIC-03: drive the TCP connection to the orchestrator. Call once per main-loop
 // iteration (lwIP poll context). No-op until Wi-Fi has an IP.
 void midi_net_poll(void);
+
+// EPIC-06 STORY-04: re-read the endpoint config (host/port/enabled) and restart
+// the connection so an edit applies live (drop + reconnect to the new endpoint).
+void midi_net_reload(void);
 
 // EPIC-03 STORY-04: orchestrator link state for display ("up"/"connecting"/"down").
 const char *midi_net_status_str(void);
