@@ -91,6 +91,7 @@ typedef enum {
 uint8_t term_getCommandLevel(void);
 void term_setCommandLevel(uint8_t level);
 void term_setLastSingleKeyCommand(char key);
+uint32_t term_getKeystrokeSeq(void);
 
 /**
  * @brief chandler callback that publishes a parsed protocol command

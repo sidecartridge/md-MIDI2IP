@@ -2,7 +2,7 @@
 id: STORY-02
 epic: EPIC-06
 title: Boot menu with countdown (E = firmware, X = Booster)
-status: in-progress
+status: done
 ---
 
 ## Goal
@@ -15,11 +15,11 @@ auto-starts the firmware.
 
 ## Tasks
 
-- [ ] Render a boot-menu screen (Atari framebuffer + local OLED) with the app name, the key hints, and a live **countdown** — porting md-drives-emulator's menu/countdown rendering (`term` / `display_term`)
-- [ ] **[E]** starts the MIDI-to-IP firmware: triggers the existing `f`/`CMD_START` → `rom_function` → `USERFW` dispatch and tears the menu down
-- [ ] **[X]** jumps to the Booster via `reset_jump_to_booster()` (already in `reset.c`), mirroring md-drives-emulator's exit-to-Booster
-- [ ] The countdown auto-runs the **[E]** action on expiry; any keypress before zero cancels the auto-start
-- [ ] Only E / X act; all other keys are ignored on the menu
+- [x] Render a boot-menu screen (Atari framebuffer + local OLED) with the app name, the key hints, and a live **countdown** — porting md-drives-emulator's menu/countdown rendering (`term` / `display_term`)
+- [x] **[E]** starts the MIDI-to-IP firmware: triggers the existing `f`/`CMD_START` → `rom_function` → `USERFW` dispatch and tears the menu down
+- [x] **[X]** jumps to the Booster via `reset_jump_to_booster()` (already in `reset.c`), mirroring md-drives-emulator's exit-to-Booster
+- [x] The countdown auto-runs the **[E]** action on expiry; any keypress before zero cancels the auto-start
+- [x] Only E / X act; all other keys are ignored on the menu
 
 ## Acceptance
 

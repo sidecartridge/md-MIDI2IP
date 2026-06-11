@@ -212,6 +212,11 @@ uint8_t term_getCommandLevel(void) { return commandLevel; }
 void term_setCommandLevel(uint8_t level) { commandLevel = level; }
 void term_setLastSingleKeyCommand(char key) { lastSingleKeyCommand = key; }
 
+// Monotonic keystroke counter — emul.c reads it to stop the boot countdown on
+// ANY keypress (whether or not the key maps to a menu command).
+static volatile uint32_t keystrokeSeq = 0;
+uint32_t term_getKeystrokeSeq(void) { return keystrokeSeq; }
+
 // Getter method for inputBuffer
 char *term_getInputBuffer(void) { return inputBuffer; }
 
@@ -676,6 +681,7 @@ void __not_in_flash_func(term_loop)() {
           DPRINTF("Keystroke: %d. Shift key: %d, Scan code: %d\n", keystroke,
                   shiftKey, scanCode);
         }
+        keystrokeSeq++;  // any key — used by emul.c to stop the boot countdown
         termInputChar(keystroke, shiftKey != 0);
         break;
       }

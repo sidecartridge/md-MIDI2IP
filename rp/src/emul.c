@@ -9,6 +9,7 @@
 #include "emul.h"
 
 #include <stdint.h>
+#include <stdio.h>   // snprintf
 #include <stdlib.h>  // strtol
 
 // inclusw in the C file to avoid multiple definitions
@@ -18,6 +19,7 @@
 #include "constants.h"
 #include "debug.h"
 #include "display.h"
+#include "display_term.h"  // DISPLAY_TERM_CHAR_HEIGHT (countdown bar)
 #include "ff.h"
 #include "gconfig.h"
 #include "memfunc.h"
@@ -46,7 +48,6 @@ enum {
 // Command handlers
 static void cmdMenu(const char *arg);
 static void cmdClear(const char *arg);
-static void cmdExit(const char *arg);
 static void cmdFirmware(const char *arg);
 static void cmdHelp(const char *arg);
 static void cmdBooster(const char *arg);
@@ -67,7 +68,7 @@ static const Command commands[] = {
     {"m", cmdMenu},
     {"h", cmdHost},
     {"p", cmdPort},
-    {"e", cmdExit},
+    {"e", cmdFirmware},
     {"f", cmdFirmware},
     {"x", cmdBooster},
     {"?", cmdHelp},
@@ -91,6 +92,16 @@ static bool keepActive = true;
 static bool menuScreenActive = false;
 static absolute_time_t menuRefreshTime;
 
+// Boot countdown (EPIC-06 STORY-02, md-drives-emulator style): the menu
+// auto-launches the firmware after BOOT_COUNTDOWN_SECS unless a key is pressed.
+// It renders in the bottom info bar (showCounter); ANY keystroke halts it,
+// detected via term's keystroke seq.
+#define BOOT_COUNTDOWN_SECS 10
+static bool haltCountdown = true;
+static int countdown = 0;
+static absolute_time_t lastDecrement;
+static uint32_t countdownStartSeq = 0;
+
 // Polling tick used as the network poll callback so command handling stays
 // alive during multi-second WiFi operations.
 static void __not_in_flash_func(emul_pollTick)(void) {
@@ -111,6 +122,32 @@ static void showTitle() {
       "Microfirmware test app - " RELEASE_VERSION "\n");
 }
 
+// Bottom info bar (md-drives-emulator style): an inverted full-width box on the
+// last text row, drawn in the small squeezed font, then restore the term font.
+static void drawSetupInfoLine(const char *message) {
+  u8g2_t *u8g2 = display_getU8g2Ref();
+  u8g2_SetDrawColor(u8g2, 1);
+  u8g2_DrawBox(u8g2, 0, DISPLAY_HEIGHT - DISPLAY_TERM_CHAR_HEIGHT, DISPLAY_WIDTH,
+               DISPLAY_TERM_CHAR_HEIGHT);
+  u8g2_SetFont(u8g2, u8g2_font_squeezed_b7_tr);
+  u8g2_SetDrawColor(u8g2, 0);
+  u8g2_DrawStr(u8g2, 0, DISPLAY_HEIGHT - 1, (message != NULL) ? message : "");
+  u8g2_SetDrawColor(u8g2, 1);
+  u8g2_SetFont(u8g2, u8g2_font_amstrad_cpc_extended_8f);
+}
+
+// Render the boot countdown into the bottom bar.
+static void showCounter(int cdown) {
+  char msg[64];
+  if (cdown > 0) {
+    snprintf(msg, sizeof(msg),
+             "Starting firmware in %d s...   [E]xit now   [X] Booster", cdown);
+  } else {
+    snprintf(msg, sizeof(msg), "Starting firmware...");
+  }
+  drawSetupInfoLine(msg);
+}
+
 static void menu(void) {
   menuScreenActive = true;
   term_setCommandLevel(TERM_COMMAND_LEVEL_SINGLE_KEY);  // single-key menu
@@ -128,8 +165,8 @@ static void menu(void) {
   term_printString((cfgPort != NULL) ? cfgPort->value : "?");
   term_printString("\n\n");
 
-  term_printString("[F]irmware launch | [X] Back to Booster\n");
-  term_printString("[S]ettings        | [E]xit to desktop\n\n");
+  term_printString("[E] Start firmware | [X] Back to Booster\n");
+  term_printString("[S]ettings\n\n");
 
   // Display network information
   term_printNetworkInfo();
@@ -217,13 +254,6 @@ void cmdPort(const char *arg) {
 void cmdClear(const char *arg) {
   menuScreenActive = false;
   term_clearScreen();
-}
-
-void cmdExit(const char *arg) {
-  menuScreenActive = false;
-  term_printString("Exiting terminal...\n");
-  // Send continue to desktop command
-  SEND_COMMAND_TO_DISPLAY(DISPLAY_COMMAND_CONTINUE);
 }
 
 void cmdFirmware(const char *arg) {
@@ -330,8 +360,14 @@ static void init(void) {
   // Clear the screen
   term_clearScreen();
 
-  // Display the menu
+  // Display the boot menu with the auto-launch countdown (EPIC-06 STORY-02)
+  countdown = BOOT_COUNTDOWN_SECS;
+  lastDecrement = get_absolute_time();
+  countdownStartSeq = term_getKeystrokeSeq();
+  haltCountdown = false;
   menu();
+  showCounter(countdown);  // initial countdown bar
+  display_refresh();
 
   // Example 1: Move the cursor up one line.
   // VT52 sequence: ESC A (moves cursor up)
@@ -577,7 +613,29 @@ void emul_start() {
       nextNetPoll = make_timeout_time_ms(NET_POLL_MS);
     }
 
-    if (menuScreenActive) {
+    // Boot countdown (md-drives-emulator style): ANY keystroke halts it; while
+    // running it updates only the bottom bar (no menu redraw); on expiry it
+    // auto-launches the firmware (EPIC-06 STORY-02).
+    if (!haltCountdown && term_getKeystrokeSeq() != countdownStartSeq) {
+      haltCountdown = true;
+      if (menuScreenActive) {
+        drawSetupInfoLine("Countdown stopped.");
+        display_refresh();
+      }
+    }
+    if (menuScreenActive && !haltCountdown) {
+      if (absolute_time_diff_us(lastDecrement, get_absolute_time()) >= 1000000) {
+        lastDecrement = get_absolute_time();
+        countdown--;
+        if (countdown <= 0) {
+          haltCountdown = true;
+          cmdFirmware(NULL);  // auto-launch firmware on countdown expiry
+        } else {
+          showCounter(countdown);
+          display_refresh();
+        }
+      }
+    } else if (menuScreenActive) {
       char *input = term_getInputBuffer();
       bool hasPendingInput = (input != NULL) && (input[0] != '\0');
       if (!hasPendingInput &&
