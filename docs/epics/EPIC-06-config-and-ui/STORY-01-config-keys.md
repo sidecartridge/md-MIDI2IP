@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-06
 title: Per-app config keys for the MIDI endpoint
-status: todo
+status: done
 milestone: alpha-mvp
 ---
 
@@ -13,10 +13,10 @@ editable at runtime.
 
 ## Tasks
 
-- [ ] Add keys: endpoint host, port, transport, enabled (physical-port passthrough deferred — D-07)
-- [ ] Provide sensible defaults in `aconfig` init
-- [ ] Load on startup and apply (gate networking on `enabled`)
-- [ ] Persist changes to `CONFIG_FLASH` (Core0-safe flash write)
+- [x] Add keys: `MIDI_HOST`, `MIDI_PORT`, `MIDI_ENABLED` (transport fixed to TCP — D-03; physical-port passthrough deferred — D-07)
+- [x] Provide sensible defaults in `aconfig` init (host `0.0.0.0`, port `5005`, enabled `true`)
+- [x] Load on startup and apply (`midi_init` reads them; `midi_net_poll` gates the connection on `MIDI_ENABLED`)
+- [x] Persist to `CONFIG_FLASH` — `aconfig_init` writes the defaults; `settings_save` (Core0-safe) persists edits (the edit UI is STORY-04)
 
 ## Acceptance
 
@@ -25,4 +25,8 @@ the new host without a rebuild.
 
 ## Notes
 
-Keys live in `aconfig.c`. Respect `PICO_FLASH_ASSUME_CORE0_SAFE=1`.
+Keys live in `aconfig.c`'s `defaultEntries[]` (names/defaults in `midi.h`); read
+in `midi.c::midi_init` into `midiNetHost` / `midiNetPort` / `midiEnabled`. Respect
+`PICO_FLASH_ASSUME_CORE0_SAFE=1`. The runtime change-and-reconnect path is exercised
+once STORY-04 adds the on-screen editor. Builds green; power-cycle persistence to
+be confirmed on hardware.

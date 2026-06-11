@@ -15,8 +15,10 @@
 
 #include "midi.h"
 
-#include <stdio.h>  // snprintf
+#include <stdio.h>   // snprintf
+#include <stdlib.h>  // atoi
 
+#include "aconfig.h"  // aconfig_getContext + settings_find_entry
 #include "blink.h"
 #include "chandler.h"
 #include "constants.h"  // __rom_in_ram_start__
@@ -44,6 +46,11 @@ static uint16_t midiInTail = 0;  // next read
 static uint32_t midiCmdSend = 0;
 static uint32_t midiCmdRecv = 0;
 
+// Endpoint config (EPIC-06 STORY-01) — loaded from aconfig in midi_init().
+static char midiNetHost[SETTINGS_MAX_VALUE_LENGTH] = MIDI_DEFAULT_HOST;
+static uint16_t midiNetPort = MIDI_DEFAULT_PORT;
+static bool midiEnabled = true;
+
 static inline void __not_in_flash_func(midi_in_push)(uint8_t b) {
   uint16_t next = (uint16_t)((midiInHead + 1) & (MIDI_IN_QUEUE_SIZE - 1));
   if (next == midiInTail) return;  // full: drop
@@ -60,16 +67,11 @@ static inline void __not_in_flash_func(midi_publish_depth)(void) {
 }
 
 // --- EPIC-03 STORY-01: TCP client to the orchestrator ---
-// Connection lifecycle only: connect to a hardcoded dev endpoint and track
-// state. Sending (STORY-02) and receive→IN-queue (STORY-03) come next; for now
-// the receive callback discards data. EPIC-04 makes the endpoint configurable.
-//
-// DEV: set MIDI_NET_HOST to the machine running the echo peer (see the EPIC-03
-// STORY-05 echo server). The RP is a raw-TCP client (lwIP NO_SYS poll mode), so
-// everything below runs from the main loop / lwIP poll context — no locking.
-// Placeholder — set to the orchestrator's IP for dev; EPIC-04 makes it configurable.
-#define MIDI_NET_HOST "0.0.0.0"
-#define MIDI_NET_PORT 5005
+// Connection lifecycle. The orchestrator endpoint (host/port) and the enable
+// flag come from aconfig (EPIC-06 STORY-01), loaded in midi_init() into
+// midiNetHost / midiNetPort / midiEnabled. The RP is a raw-TCP client (lwIP
+// NO_SYS poll mode), so everything below runs from the main loop / lwIP poll
+// context — no locking.
 #define MIDI_NET_BACKOFF_MIN_MS 500   // first reconnect delay
 #define MIDI_NET_BACKOFF_MAX_MS 8000  // backoff cap
 
@@ -156,13 +158,13 @@ static err_t midi_net_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err) {
   midiNetState = MIDI_NET_UP;
   midiNetBackoffMs = MIDI_NET_BACKOFF_MIN_MS;  // reset backoff on success
   midiNetUpSince = get_absolute_time();
-  DPRINTF("MIDI net: connected to %s:%d\n", MIDI_NET_HOST, MIDI_NET_PORT);
+  DPRINTF("MIDI net: connected to %s:%d\n", midiNetHost, midiNetPort);
   return ERR_OK;
 }
 
 static void midi_net_try_connect(void) {
   ip_addr_t ip;
-  if (!ipaddr_aton(MIDI_NET_HOST, &ip)) {
+  if (!ipaddr_aton(midiNetHost, &ip)) {
     return;
   }
   midiNetPcb = tcp_new();
@@ -175,7 +177,7 @@ static void midi_net_try_connect(void) {
   tcp_recv(midiNetPcb, midi_net_recv_cb);
   tcp_err(midiNetPcb, midi_net_err_cb);
   midiNetState = MIDI_NET_CONNECTING;
-  if (tcp_connect(midiNetPcb, &ip, MIDI_NET_PORT, midi_net_connected_cb) !=
+  if (tcp_connect(midiNetPcb, &ip, midiNetPort, midi_net_connected_cb) !=
       ERR_OK) {
     midi_net_reset();
   }
@@ -226,6 +228,9 @@ void midi_net_poll(void) {
     lastRecv = midiCmdRecv;
     cmdStatAt = make_timeout_time_ms(1000);
   }
+  if (!midiEnabled) {
+    return;  // STORY-01: orchestrator connection disabled in config
+  }
   if (midiNetState != MIDI_NET_DOWN) {
     return;
   }
@@ -268,10 +273,10 @@ void midi_net_ping(char *buf, size_t len) {
     uint32_t up_s =
         (uint32_t)(absolute_time_diff_us(midiNetUpSince, get_absolute_time()) /
                    1000000);
-    snprintf(buf, len, "%s:%d up (%lus)", MIDI_NET_HOST, MIDI_NET_PORT,
+    snprintf(buf, len, "%s:%d up (%lus)", midiNetHost, midiNetPort,
              (unsigned long)up_s);
   } else {
-    snprintf(buf, len, "%s:%d %s", MIDI_NET_HOST, MIDI_NET_PORT,
+    snprintf(buf, len, "%s:%d %s", midiNetHost, midiNetPort,
              midi_net_status_str());
   }
 }
@@ -337,6 +342,27 @@ static void __not_in_flash_func(midi_command_cb)(TransmissionProtocol *protocol,
 }
 
 void midi_init(void) {
+  // Load the orchestrator endpoint config (EPIC-06 STORY-01). aconfig_init() ran
+  // in main() before emul_start(), so the context is populated.
+  SettingsContext *cfg = aconfig_getContext();
+  if (cfg != NULL) {
+    SettingsConfigEntry *e = settings_find_entry(cfg, MIDI_CFG_HOST);
+    if (e != NULL && e->value[0] != '\0') {
+      snprintf(midiNetHost, sizeof(midiNetHost), "%s", e->value);
+    }
+    e = settings_find_entry(cfg, MIDI_CFG_PORT);
+    if (e != NULL && e->value[0] != '\0') {
+      midiNetPort = (uint16_t)atoi(e->value);
+    }
+    e = settings_find_entry(cfg, MIDI_CFG_ENABLED);
+    if (e != NULL && e->value[0] != '\0') {
+      char c = e->value[0];
+      midiEnabled = (c == 't' || c == 'T' || c == '1' || c == 'y' || c == 'Y');
+    }
+  }
+  DPRINTF("MIDI cfg: host=%s port=%u enabled=%d\n", midiNetHost,
+          (unsigned)midiNetPort, (int)midiEnabled);
+
   // No pending MIDI-IN bytes at boot. The RP owns this field in the served ROM
   // image; the m68k only ever reads it (CMD_MIDI_RECV).
   WRITE_AND_SWAP_LONGWORD((unsigned int)&__rom_in_ram_start__,
