@@ -341,9 +341,9 @@ static void __not_in_flash_func(midi_command_cb)(TransmissionProtocol *protocol,
   }
 }
 
-void midi_init(void) {
-  // Load the orchestrator endpoint config (EPIC-06 STORY-01). aconfig_init() ran
-  // in main() before emul_start(), so the context is populated.
+// Load the orchestrator endpoint config (MIDI_HOST/PORT/ENABLED) from aconfig
+// into the runtime variables. aconfig_init() ran in main() before this.
+static void midi_load_config(void) {
   SettingsContext *cfg = aconfig_getContext();
   if (cfg != NULL) {
     SettingsConfigEntry *e = settings_find_entry(cfg, MIDI_CFG_HOST);
@@ -362,6 +362,22 @@ void midi_init(void) {
   }
   DPRINTF("MIDI cfg: host=%s port=%u enabled=%d\n", midiNetHost,
           (unsigned)midiNetPort, (int)midiEnabled);
+}
+
+// EPIC-06 STORY-04: re-read the endpoint config and restart the connection so a
+// host/port change applies live — drop any current connection and reconnect to
+// the new endpoint promptly (no backoff wait).
+void midi_net_reload(void) {
+  midi_load_config();
+  midi_net_reset();  // close any live pcb -> MIDI_NET_DOWN, flush the IN queue
+  midiNetBackoffMs = MIDI_NET_BACKOFF_MIN_MS;
+  midiNetNextAttemptValid = false;  // let midi_net_poll connect on the next tick
+}
+
+void midi_init(void) {
+  // Load the orchestrator endpoint config (EPIC-06 STORY-01). aconfig_init() ran
+  // in main() before emul_start(), so the context is populated.
+  midi_load_config();
 
   // No pending MIDI-IN bytes at boot. The RP owns this field in the served ROM
   // image; the m68k only ever reads it (CMD_MIDI_RECV).

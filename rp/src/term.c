@@ -201,6 +201,17 @@ static uint8_t prevCursorY = 0;
 static char inputBuffer[TERM_INPUT_BUFFER_SIZE];
 static size_t inputLength = 0;
 
+// Terminal input mode + the active single-key command (md-drives-emulator
+// command-level model). Default COMMAND_INPUT keeps the classic "command arg"
+// line; the boot menu (emul.c) switches to SINGLE_KEY, and a field editor to
+// DATA_INPUT (re-invoking the command that opened it on Enter).
+static uint8_t commandLevel = TERM_COMMAND_LEVEL_COMMAND_INPUT;
+static char lastSingleKeyCommand = 0;
+
+uint8_t term_getCommandLevel(void) { return commandLevel; }
+void term_setCommandLevel(uint8_t level) { commandLevel = level; }
+void term_setLastSingleKeyCommand(char key) { lastSingleKeyCommand = key; }
+
 // Getter method for inputBuffer
 char *term_getInputBuffer(void) { return inputBuffer; }
 
@@ -427,7 +438,7 @@ void term_printString(const char *str) {
 
 // Called whenever a character is entered by the user
 // This is the single point of entry for user input
-static void termInputChar(char chr) {
+static void termInputChar(char chr, bool shiftKey) {
   // Check for backspace
   if (chr == '\b') {
     display_termChar(prevCursorX, prevCursorY, ' ');
@@ -460,56 +471,77 @@ static void termInputChar(char chr) {
     return;
   }
 
-  // If it's newline or carriage return, finalize the line
-  if (chr == '\n' || chr == '\r') {
-    // Render newline on screen
-    termRenderChar('\n');
-
-    // Process input_buffer
-    // Split the input into command and argument
-    char command[TERM_INPUT_BUFFER_SIZE] = {0};
-    char arg[TERM_INPUT_BUFFER_SIZE] = {0};
-    sscanf(inputBuffer, "%63s %63[^\n]", command,
-           arg);  // Split at the first space
-
-    bool commandFound = false;
-    for (size_t i = 0; i < numCommands; i++) {
-      if (strcmp(command, commands[i].command) == 0) {
-        commands[i].handler(arg);  // Pass the argument to the handler
-        commandFound = true;
-      }
-    }
-    if ((!commandFound) && (strlen(command) > 0)) {
-      // The custom unknown command manager is called when the command is empty
-      // in the command table. This is useful to manage custom entries.
+  switch (commandLevel) {
+    case TERM_COMMAND_LEVEL_SINGLE_KEY: {
+      // One keystroke = one command (the menu). Case-fold by the shift key.
+      chr = shiftKey ? (char)toupper((unsigned char)chr)
+                     : (char)tolower((unsigned char)chr);
       for (size_t i = 0; i < numCommands; i++) {
-        if (strlen(commands[i].command) == 0) {
-          commands[i].handler(inputBuffer);  // Pass the argument to the handler
+        if (chr == commands[i].command[0]) {
+          lastSingleKeyCommand = chr;
+          commands[i].handler(NULL);
+          break;
         }
       }
+      memset(inputBuffer, 0, TERM_INPUT_BUFFER_SIZE);
+      inputLength = 0;
+      display_termRefresh();
+      return;
     }
-
-    // Reset input buffer
-    memset(inputBuffer, 0, TERM_INPUT_BUFFER_SIZE);
-    inputLength = 0;
-
-    term_printString("> ");
-    display_termRefresh();
-    return;
+    case TERM_COMMAND_LEVEL_DATA_INPUT: {
+      // Collect a typed value; on Enter re-invoke the command that opened it.
+      if (chr == '\n' || chr == '\r') {
+        termRenderChar('\n');
+        for (size_t i = 0; i < numCommands; i++) {
+          if (lastSingleKeyCommand == commands[i].command[0]) {
+            commands[i].handler(inputBuffer);
+            break;
+          }
+        }
+        return;
+      }
+      break;  // otherwise fall through to append the character
+    }
+    case TERM_COMMAND_LEVEL_COMMAND_INPUT:
+    default: {
+      // Classic "command arg" line, finalized on Enter.
+      if (chr == '\n' || chr == '\r') {
+        termRenderChar('\n');
+        char command[TERM_INPUT_BUFFER_SIZE] = {0};
+        char arg[TERM_INPUT_BUFFER_SIZE] = {0};
+        sscanf(inputBuffer, "%63s %63[^\n]", command,
+               arg);  // Split at the first space
+        bool commandFound = false;
+        for (size_t i = 0; i < numCommands; i++) {
+          if (strcmp(command, commands[i].command) == 0) {
+            commands[i].handler(arg);  // Pass the argument to the handler
+            commandFound = true;
+          }
+        }
+        if ((!commandFound) && (strlen(command) > 0)) {
+          // The custom unknown command manager is called when the command is
+          // empty in the command table (useful for custom entries).
+          for (size_t i = 0; i < numCommands; i++) {
+            if (strlen(commands[i].command) == 0) {
+              commands[i].handler(inputBuffer);
+            }
+          }
+        }
+        memset(inputBuffer, 0, TERM_INPUT_BUFFER_SIZE);
+        inputLength = 0;
+        term_printString("> ");
+        display_termRefresh();
+        return;
+      }
+      break;  // otherwise fall through to append the character
+    }
   }
 
-  // If it's a normal character
-  // Add it to input_buffer if there's space
+  // Normal character: append to the input buffer if there's space.
   if (inputLength < TERM_INPUT_BUFFER_SIZE - 1) {
     inputBuffer[inputLength++] = chr;
-    // Render char on screen
     termRenderChar(chr);
-
-    // show block cursor
-
     display_termRefresh();
-  } else {
-    // Buffer full, ignore or beep?
   }
 }
 
@@ -616,7 +648,7 @@ void __not_in_flash_func(term_loop)() {
         display_termStart(DISPLAY_TILES_WIDTH, DISPLAY_TILES_HEIGHT);
         term_clearScreen();
         term_printString("Type 'help' for available commands.\n");
-        termInputChar('\n');
+        termInputChar('\n', false);
         SEND_COMMAND_TO_DISPLAY(DISPLAY_COMMAND_TERM);
         DPRINTF("Send command to display: DISPLAY_COMMAND_TERM\n");
       } break;
@@ -644,7 +676,7 @@ void __not_in_flash_func(term_loop)() {
           DPRINTF("Keystroke: %d. Shift key: %d, Scan code: %d\n", keystroke,
                   shiftKey, scanCode);
         }
-        termInputChar(keystroke);
+        termInputChar(keystroke, shiftKey != 0);
         break;
       }
       default:

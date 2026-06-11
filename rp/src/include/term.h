@@ -77,6 +77,21 @@ typedef struct {
   void (*handler)(const char *arg);
 } Command;
 
+// Terminal input mode (ported from md-drives-emulator). SINGLE_KEY drives the
+// menu (one keystroke = one command, no Enter); DATA_INPUT collects a typed
+// value and, on Enter, re-invokes the command that opened it (term_setCommandLevel
+// + term_setLastSingleKeyCommand); COMMAND_INPUT is the classic "command arg"
+// line. Used by the boot menu (EPIC-06 STORY-02) and the endpoint editors (STORY-04).
+typedef enum {
+  TERM_COMMAND_LEVEL_SINGLE_KEY = 0,
+  TERM_COMMAND_LEVEL_COMMAND_INPUT = 1,
+  TERM_COMMAND_LEVEL_DATA_INPUT = 2,
+} term_CommandLevel;
+
+uint8_t term_getCommandLevel(void);
+void term_setCommandLevel(uint8_t level);
+void term_setLastSingleKeyCommand(char key);
+
 /**
  * @brief chandler callback that publishes a parsed protocol command
  *        into the terminal double-buffer for term_loop() to drain.

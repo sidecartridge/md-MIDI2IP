@@ -9,6 +9,7 @@
 #include "emul.h"
 
 #include <stdint.h>
+#include <stdlib.h>  // strtol
 
 // inclusw in the C file to avoid multiple definitions
 #include "aconfig.h"
@@ -58,11 +59,14 @@ static void cmdPutInt(const char *arg);
 static void cmdPutBool(const char *arg);
 static void cmdPutString(const char *arg);
 static void cmdPing(const char *arg);
+static void cmdHost(const char *arg);
+static void cmdPort(const char *arg);
 
 // Command table
 static const Command commands[] = {
     {"m", cmdMenu},
-    {"h", cmdHelp},
+    {"h", cmdHost},
+    {"p", cmdPort},
     {"e", cmdExit},
     {"f", cmdFirmware},
     {"x", cmdBooster},
@@ -109,10 +113,23 @@ static void showTitle() {
 
 static void menu(void) {
   menuScreenActive = true;
+  term_setCommandLevel(TERM_COMMAND_LEVEL_SINGLE_KEY);  // single-key menu
   showTitle();
   term_printString("\n\n");
-  term_printString("[S]ettings     | [F]irmware launch\n");
-  term_printString("[E]xit desktop | [X] Back to Booster\n\n");
+
+  // Orchestrator endpoint (EPIC-06 STORY-04) — current values from aconfig.
+  SettingsConfigEntry *cfgHost =
+      settings_find_entry(aconfig_getContext(), MIDI_CFG_HOST);
+  SettingsConfigEntry *cfgPort =
+      settings_find_entry(aconfig_getContext(), MIDI_CFG_PORT);
+  term_printString("[H]ost: ");
+  term_printString((cfgHost != NULL) ? cfgHost->value : "?");
+  term_printString("   [P]ort: ");
+  term_printString((cfgPort != NULL) ? cfgPort->value : "?");
+  term_printString("\n\n");
+
+  term_printString("[F]irmware launch | [X] Back to Booster\n");
+  term_printString("[S]ettings        | [E]xit to desktop\n\n");
 
   // Display network information
   term_printNetworkInfo();
@@ -149,6 +166,54 @@ void cmdPing(const char *arg) {
   term_printString("\n");
 }
 
+// EPIC-06 STORY-04: edit the orchestrator host. First press (SINGLE_KEY) prompts
+// and switches to DATA_INPUT; the typed value re-invokes this on Enter, then it
+// validates and persists to aconfig (CONFIG_FLASH).
+void cmdHost(const char *arg) {
+  (void)arg;
+  if (term_getCommandLevel() == TERM_COMMAND_LEVEL_SINGLE_KEY) {
+    menuScreenActive = false;
+    showTitle();
+    term_printString("\n\nOrchestrator host (IP or hostname): ");
+    term_setCommandLevel(TERM_COMMAND_LEVEL_DATA_INPUT);
+    return;
+  }
+  term_setCommandLevel(TERM_COMMAND_LEVEL_SINGLE_KEY);
+  const char *input = term_getInputBuffer();
+  if (input[0] != '\0') {
+    settings_put_string(aconfig_getContext(), MIDI_CFG_HOST, input);
+    settings_save(aconfig_getContext(), true);
+    midi_net_reload();  // apply live: drop + reconnect to the new endpoint
+  }
+  term_clearInputBuffer();
+  menu();
+}
+
+// EPIC-06 STORY-04: edit the orchestrator port (1..65535), same DATA_INPUT flow.
+void cmdPort(const char *arg) {
+  (void)arg;
+  if (term_getCommandLevel() == TERM_COMMAND_LEVEL_SINGLE_KEY) {
+    menuScreenActive = false;
+    showTitle();
+    term_printString("\n\nOrchestrator port (1-65535): ");
+    term_setCommandLevel(TERM_COMMAND_LEVEL_DATA_INPUT);
+    return;
+  }
+  term_setCommandLevel(TERM_COMMAND_LEVEL_SINGLE_KEY);
+  const char *input = term_getInputBuffer();
+  char *endptr = NULL;
+  long port = strtol(input, &endptr, 10);
+  if (input[0] != '\0' && *endptr == '\0' && port >= 1 && port <= 65535) {
+    settings_put_integer(aconfig_getContext(), MIDI_CFG_PORT, (int)port);
+    settings_save(aconfig_getContext(), true);
+    midi_net_reload();  // apply live: drop + reconnect to the new endpoint
+  } else if (input[0] != '\0') {
+    term_printString("Invalid port (must be 1-65535).\n");
+  }
+  term_clearInputBuffer();
+  menu();
+}
+
 void cmdClear(const char *arg) {
   menuScreenActive = false;
   term_clearScreen();
@@ -183,6 +248,7 @@ void cmdBooster(const char *arg) {
 
 void cmdSettings(const char *arg) {
   menuScreenActive = false;
+  term_setCommandLevel(TERM_COMMAND_LEVEL_COMMAND_INPUT);  // type 'put_str' etc.
   term_cmdSettings(arg);
 }
 

@@ -54,6 +54,10 @@ void midi_init(void);
 // iteration (lwIP poll context). No-op until Wi-Fi has an IP.
 void midi_net_poll(void);
 
+// EPIC-06 STORY-04: re-read the endpoint config (host/port/enabled) and restart
+// the connection so an edit applies live (drop + reconnect to the new endpoint).
+void midi_net_reload(void);
+
 // EPIC-03 STORY-04: orchestrator link state for display ("up"/"connecting"/"down").
 const char *midi_net_status_str(void);
 

@@ -2,7 +2,7 @@
 id: STORY-02
 epic: EPIC-06
 title: Boot menu with countdown (E = firmware, X = Booster)
-status: todo
+status: in-progress
 ---
 
 ## Goal
