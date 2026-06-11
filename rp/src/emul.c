@@ -31,11 +31,12 @@
 #include "term.h"
 
 #define SLEEP_LOOP_MS 100
-// App main-loop cadence. Kept small so chandler_loop() services the m68k's
-// busy-waiting MIDI commands promptly: a large wait here adds ~that many ms per
-// MIDI byte (the m68k blocks in send_sync until the RP responds), which breaks
-// MIDI Maze's lock-step ring — COUNT-PLAYERS times out and re-elects (C-01).
-#define BUS_LOOP_MS 1
+// Wi-Fi / terminal poll cadence. chandler_loop() — which services the m68k's
+// busy-waiting MIDI commands (send_sync) — runs EVERY loop iteration, so a byte
+// is handled in ~µs; only the network/terminal poll is throttled to this
+// interval. A wait around chandler_loop() instead would cost ~that-many ms PER
+// MIDI byte and break MIDI Maze's lock-step ring (C-01).
+#define NET_POLL_MS 1
 
 enum {
   APP_MODE_SETUP = 255  // Setup
@@ -490,22 +491,25 @@ void emul_start() {
   // The main loop runs until the user decides to exit.
   // For testing purposes, this app only shows commands to manage the settings
   DPRINTF("Start the app loop here\n");
+  absolute_time_t nextNetPoll = get_absolute_time();
   while (getKeepActive()) {
-#if PICO_CYW43_ARCH_POLL
-    network_safePoll();
-    cyw43_arch_wait_for_work_until(make_timeout_time_ms(BUS_LOOP_MS));
-#else
-    sleep_ms(BUS_LOOP_MS);
-#endif
-    // EPIC-03: drive the orchestrator TCP connection (no-op until Wi-Fi is up).
-    midi_net_poll();
-
-    // Drain the ROM3 command ring → dispatch to registered callbacks.
+    // Drain the ROM3 command ring EVERY iteration: the m68k's MIDI commands
+    // busy-wait on send_sync, so chandler_loop must run as often as possible.
+    // Gating it behind a per-loop wait cost ~1 ms PER MIDI byte — a 4 KB
+    // SEND-DATA burst then took seconds (C-01).
     chandler_loop();
 
-    // Run the terminal foreground (consume the published command, render
-    // output, etc.).
-    term_loop();
+    // Service Wi-Fi/lwIP (network_safePoll == cyw43_arch_poll), the orchestrator
+    // link, and the terminal on a light cadence — none of these need per-byte
+    // latency, and polling cyw43 every spin would saturate the SPI.
+    if (absolute_time_diff_us(get_absolute_time(), nextNetPoll) <= 0) {
+#if PICO_CYW43_ARCH_POLL
+      network_safePoll();
+#endif
+      midi_net_poll();  // drive the orchestrator TCP connection
+      term_loop();      // terminal foreground (consume command, render output)
+      nextNetPoll = make_timeout_time_ms(NET_POLL_MS);
+    }
 
     if (menuScreenActive) {
       char *input = term_getInputBuffer();
