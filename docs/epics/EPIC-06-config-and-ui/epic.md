@@ -2,7 +2,7 @@
 id: EPIC-06
 iteration: 1
 title: Configuration, UI & template cleanup
-status: todo
+status: done
 ---
 
 ## Goal
