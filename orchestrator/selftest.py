@@ -50,6 +50,15 @@ def recv_exact(s: socket.socket, n: int) -> bytes:
     return buf
 
 
+def try_recv(s: socket.socket, n: int = 16, timeout: float = 0.5) -> bytes:
+    """Best-effort recv; returns b'' if nothing arrives within `timeout`."""
+    s.settimeout(timeout)
+    try:
+        return s.recv(n)
+    except (socket.timeout, BlockingIOError, OSError):
+        return b""
+
+
 def status(http_port: int) -> dict:
     with urllib.request.urlopen(
         f"http://{HOST}:{http_port}/status.json", timeout=2
@@ -150,17 +159,53 @@ def main() -> int:
     check("start-game -> in-game", r.snapshot()["phase"] == "in-game")
     r.feed(1, b"\x82")  # TERMINATE-GAME
     check("terminate -> terminated", r.snapshot()["phase"] == "terminated")
-    r.add_player(3)  # membership change must reset the round (D-04)
+    r.add_player(3)  # a join keeps the sitting master (newcomer becomes a slave)
+    check("join keeps the master (no flip)", r.snapshot()["master"] == 1)
+    r.remove_player(1)  # the master *leaving* re-elects (D-04)
     reset = r.snapshot()
-    check("join resets phase to electing", reset["phase"] == "electing")
-    check("join clears master", reset["master"] is None)
-    check("join clears last count", reset["last_count"] is None)
+    check("master-leave clears master", reset["master"] is None)
+    check("master-leave re-elects (electing)", reset["phase"] == "electing")
+
+    # Phase D — EPIC-08 STORY-02 master-protection: once a master is established
+    # (it sent COUNT-PLAYERS), a *non-master's* stray MASTER-ELECT 0x00 is dropped
+    # from the forwarded bytes so it can't demote the master mid-count. Count
+    # values, the master's own 0x00, and in-game joystick 0x00 are untouched.
+    print("master-protection coordinator (EPIC-08 STORY-02):")
+    r2 = orch.RingState()
+    r2.add_player(1)
+    r2.add_player(2)
+    _, fwd = r2.feed(2, b"\x00")  # election: 0x00 NOT designated master, NOT dropped
+    check("0x00 forwarded during election", fwd == b"\x00")
+    check("election locks no master from 0x00", r2.snapshot()["master"] is None)
+    r2.feed(1, b"\x80\x02")  # player 1 originates COUNT-PLAYERS -> master = 1
+    check("count originator = master", r2.snapshot()["master"] == 1)
+    _, fwd = r2.feed(2, b"\x00")  # non-master stray 0x00 while counting -> DROPPED
+    check("non-master demote 0x00 dropped while counting", fwd == b"")
+    _, fwd = r2.feed(1, b"\x00")  # the master's own 0x00 -> kept
+    check("master's own 0x00 kept", fwd == b"\x00")
+    _, fwd = r2.feed(2, b"\x80\x00")  # a count *value* 0x00 (after 0x80) -> kept
+    check("count value 0x00 kept", fwd == b"\x80\x00")
+
+    with server(5097, 8097, "--coordinate"):
+        m, s = conn(5097), conn(5097)  # m connects first
+        time.sleep(0.3)
+        m.sendall(b"\x80\x02")  # m originates COUNT-PLAYERS -> m is master
+        time.sleep(0.2)
+        recv_exact(s, 2)        # drain m's count from the slave
+        s.sendall(b"\x00")      # slave stray MASTER-ELECT -> must be dropped, not reach m
+        time.sleep(0.2)
+        check("slave demote 0x00 not relayed to master", try_recv(m) == b"")
+        st = status(8097)
+        ids = sorted(p["id"] for p in st["players"])
+        check("status master = count originator (m)", st["protocol"]["master"] == ids[0])
+        m.close()
+        s.close()
 
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")
         return 1
-    print("PASS — orchestrator ring + IP-dedup + protocol-state model validated")
+    print("PASS — orchestrator ring + IP-dedup + protocol model + master-protection")
     return 0
 
 
