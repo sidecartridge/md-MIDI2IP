@@ -2,7 +2,7 @@
 id: STORY-03
 epic: EPIC-05
 title: Orchestrator client (connect, reconnect, status)
-status: todo
+status: done
 milestone: alpha-mvp
 ---
 
@@ -14,10 +14,10 @@ Make the gateway a well-behaved orchestrator client — connect to a configured
 
 ## Tasks
 
-- [ ] Connect to a configurable orchestrator host:port (CLI arg / env), `TCP_NODELAY`
-- [ ] Reconnect with backoff on drop/error; resume bridging once reconnected
-- [ ] On a drop, discard stale in-flight bytes so a reconnect starts clean (the gateway's analogue of the RP IN-queue flush)
-- [ ] Log link state transitions (down / connecting / up) to stdout
+- [x] Connect to a configurable orchestrator host:port (CLI arg / env), `TCP_NODELAY`
+- [x] Reconnect with backoff on drop/error; resume bridging once reconnected
+- [x] On a drop, discard stale in-flight bytes so a reconnect starts clean (the gateway's analogue of the RP IN-queue flush)
+- [x] Log link state transitions (down / connecting / up) to stdout
 
 ## Acceptance
 

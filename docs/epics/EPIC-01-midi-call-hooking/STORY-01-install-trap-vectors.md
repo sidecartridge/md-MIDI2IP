@@ -1,10 +1,14 @@
 ---
 id: STORY-01
 epic: EPIC-01
-title: Install and chain BIOS/XBIOS trap vectors safely
+title: Install and chain the BIOS (trap #13) device-3 vector safely
 status: done
 milestone: alpha-mvp
 ---
+
+> **Superseded:** this story originally also installed the XBIOS (`trap #14`)
+> vector. That hook was later removed — only the BIOS device-3 vector is hooked
+> now (D-05). The body below is the original record.
 
 ## Goal
 

@@ -1,7 +1,8 @@
 ---
 id: EPIC-NN
+iteration: 1   # which iteration this epic belongs to (see ITERATIONS.md)
 title: <short capability name>
-status: todo   # todo | in-progress | done | blocked
+status: todo   # todo | in-progress | done | blocked | deferred
 ---
 
 ## Goal

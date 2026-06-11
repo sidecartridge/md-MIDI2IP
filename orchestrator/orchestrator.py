@@ -9,7 +9,9 @@ Scope so far:
   - STORY-01: asyncio TCP server; a registry of players (id, peer, connect time,
     byte counters).
   - STORY-02: the **ring relay** — each player's OUT bytes are forwarded to the
-    next player's IN (insertion order, wrapping; a ring of one echoes to self).
+    next player's IN (insertion order, wrapping). A lone node has no peer and
+    gets nothing back (no self-echo), so it can't elect/count before the ring
+    forms (D-04).
   - STORY-03: a read-only **HTTP status** interface on a separate port (HTML page
     + `/status.json`), served in the same asyncio loop (race-free registry reads).
   - STORY-04: **robustness** — TCP keepalive (dead-player detection), bounded
@@ -38,6 +40,192 @@ LOG = logging.getLogger("orchestrator")
 _next_id = count(1)  # monotonic player ids
 _started_at = 0.0  # event-loop clock when serving began (for uptime)
 _listen_addr = ""  # "host:port" of the game TCP server, for display
+_inspect = False  # --inspect: decode the MIDI Maze protocol as traffic passes
+
+
+# --- MIDI Maze protocol inspection (in-line, read-only) --------------------
+# When --inspect is on, each player's MIDI-OUT stream is decoded into protocol
+# events as it is relayed, so the log shows COUNT-PLAYERS / START-GAME / JOYSTICK
+# etc. instead of raw hex. From Markus Fritze's protocol (thesis 2.4.2 / Anexo A):
+# a SLAVE re-sends every message it receives; the MASTER expects its message back.
+_MM_MASTER_ELECT = 0x00
+_MM_COUNT_PLAYERS = 0x80  # 0x80 <n>: master sends 0x80 0x00; each slave inc's <n>
+_MM_RESET_SCORE = 0x81
+_MM_TERMINATE_GAME = 0x82
+_MM_SEND_DATA = 0x83  # name\0 + maze-size + speeds + lives + 3 drones + 4096 maze + …
+_MM_START_GAME = 0x84
+_MM_ABOUT = 0x85
+_MM_NAME_DIALOG = 0x86
+# SEND-DATA fixed tail after the 0-terminated name: maze-size(1)+recharge(1)+
+# regen(1)+reappear(1)+lives(1)+drones(3)+maze(4096)+teams-flag(1)+teams(16)+
+# friendly-fire(1)+seed(2).
+_MM_SEND_DATA_FIXED = 1 + 1 + 1 + 1 + 1 + 3 + 4096 + 1 + 16 + 1 + 2  # 4123
+
+
+def _mm_joystick(b: int) -> str:
+    names = [n for n, m in (("L", 1), ("R", 2), ("D", 4), ("U", 8), ("Fire", 16)) if b & m]
+    return "+".join(names) if names else "none"
+
+
+class MidiMazeInspector:
+    """Stateful per-player decoder: feed() OUT bytes, get protocol-event labels.
+    Best-effort (not fully phase-aware) — enough to read the setup handshake
+    where master election and COUNT-PLAYERS live."""
+
+    def __init__(self) -> None:
+        self._state = "normal"
+        self._fixed_left = 0
+        self._in_game = False
+
+    def feed(self, data: bytes) -> "list[str]":
+        events: "list[str]" = []
+        for b in data:
+            events.extend(self._byte(b))
+        return events
+
+    def _byte(self, b: int) -> "list[str]":
+        if self._state == "expect_count":  # the byte after 0x80 is the count
+            self._state = "normal"
+            return [f"COUNT-PLAYERS(n={b})"]
+        if self._state == "send_data_name":  # consume the 0-terminated name
+            if b == 0x00:
+                self._state = "send_data_fixed"
+                self._fixed_left = _MM_SEND_DATA_FIXED
+            return []
+        if self._state == "send_data_fixed":  # consume the fixed game-data tail
+            self._fixed_left -= 1
+            if self._fixed_left <= 0:
+                self._state = "normal"
+                self._in_game = True
+                return ["SEND-DATA(end)"]
+            return []
+        if b == _MM_COUNT_PLAYERS:
+            self._state = "expect_count"
+            return ["COUNT-PLAYERS-start"]  # designate master NOW, not after the count byte
+        if b == _MM_RESET_SCORE:
+            return ["RESET-SCORE"]
+        if b == _MM_TERMINATE_GAME:
+            return ["TERMINATE-GAME"]
+        if b == _MM_SEND_DATA:
+            self._state = "send_data_name"
+            return ["SEND-DATA(start)"]
+        if b == _MM_START_GAME:
+            return ["START-GAME"]
+        if b == _MM_ABOUT:
+            return ["ABOUT"]
+        if b == _MM_NAME_DIALOG:
+            return ["NAME-DIALOG"]
+        if b == _MM_MASTER_ELECT:
+            return [f"JOYSTICK({_mm_joystick(b)})"] if self._in_game else ["MASTER-ELECT"]
+        return [f"JOYSTICK({_mm_joystick(b)})"] if self._in_game else [f"byte(0x{b:02x})"]
+
+
+class RingState:
+    """EPIC-08 STORY-01 — read-only ring-level view of the MIDI Maze protocol
+    (one global ring, D-04), inferred from the bytes the orchestrator relays.
+
+    Powers the HTTP status and is the foundation the STORY-02 election
+    coordinator will act on. **Observation only** — it never alters relayed
+    bytes (D-02). Master detection is a heuristic here (the first node to
+    originate a post-election control message); STORY-02 makes it authoritative.
+
+    Phases: idle / electing / counting / name-dialog / in-game / terminated."""
+
+    def __init__(self) -> None:
+        self._decoders: "dict[int, MidiMazeInspector]" = {}
+        self.phase = "idle"
+        self.master_id: "int | None" = None
+        self.last_count: "int | None" = None
+
+    def add_player(self, pid: int) -> None:
+        self._decoders[pid] = MidiMazeInspector()
+        if self.phase == "idle":
+            self.phase = "electing"
+        # Keep any sitting master: a join makes the newcomer a SLAVE (its election
+        # is suppressed), it must NOT depose the master — that caused a master-flip
+        # on hardware. Only the master *leaving* re-elects (remove_player).
+
+    def remove_player(self, pid: int) -> None:
+        was_master = pid == self.master_id
+        self._decoders.pop(pid, None)
+        if was_master or not self._decoders:
+            self._reset_round()  # master left (or ring empty) → re-elect (D-04)
+
+    def _reset_round(self) -> None:
+        self.phase = "electing" if self._decoders else "idle"
+        self.master_id = None
+        self.last_count = None
+
+    def feed(self, pid: int, data: bytes) -> "tuple[list[str], bytes]":
+        """Decode one player's OUT bytes, update the ring view, and return
+        (events, forward_bytes). forward_bytes drops a **non-master's stray
+        MASTER-ELECT `0x00`** once a master is established (EPIC-08 STORY-02):
+        per the thesis, a node that *receives* a `0x00` becomes SLAVE, so a stray
+        `0x00` from another node would DEMOTE the sitting master and abort
+        COUNT-PLAYERS — which is exactly the "0 machines" failure. Count values,
+        the master's own bytes, and in-game joystick `0x00` are left untouched
+        (the decoder distinguishes them). Caller applies forward_bytes only when
+        coordination is enabled."""
+        decoder = self._decoders.get(pid)
+        if decoder is None:
+            return [], data
+        events: "list[str]" = []
+        forward = bytearray()
+        for b in data:
+            byte_events = decoder._byte(b)
+            for event in byte_events:
+                events.append(event)
+                self._observe(pid, event)
+            demote = (
+                byte_events == ["MASTER-ELECT"]
+                and self.master_id is not None
+                and pid != self.master_id
+                and self.phase in ("counting", "name-dialog", "in-game")
+            )
+            if not demote:
+                forward.append(b)
+        return events, bytes(forward)
+
+    def _observe(self, pid: int, event: str) -> None:
+        # NB: do NOT designate the master from MASTER-ELECT (`0x00`) — both nodes
+        # send it and it's ambiguous. The reliable signal is who *originates*
+        # COUNT-PLAYERS / NAME-DIALOG / START-GAME (only the master does).
+        if event == "MASTER-ELECT":
+            if self.phase in ("idle", "in-game", "terminated"):
+                self.phase = "electing"
+        elif event.startswith("COUNT-PLAYERS"):  # "-start" (on 0x80) or "(n=…)"
+            self.phase = "counting"
+            if self.master_id is None:
+                self.master_id = pid  # first to originate the count = master
+            if "n=" in event:
+                try:
+                    self.last_count = int(event.split("n=")[1].rstrip(")"))
+                except (IndexError, ValueError):
+                    pass
+        elif event == "NAME-DIALOG":
+            self.phase = "name-dialog"
+            if self.master_id is None:
+                self.master_id = pid
+        elif event == "START-GAME":
+            if self.master_id is None:
+                self.master_id = pid
+            self.phase = "in-game"
+        elif event.startswith("SEND-DATA"):
+            self.phase = "in-game"
+        elif event == "TERMINATE-GAME":
+            self.phase = "terminated"
+
+    def snapshot(self) -> dict:
+        return {
+            "phase": self.phase,
+            "master": self.master_id,
+            "players": len(self._decoders),
+            "last_count": self.last_count,
+        }
+
+
+_ring = RingState()  # the single global ring's protocol state (D-04)
+_coordinate = False  # --coordinate: protect the established master (EPIC-08 STORY-02)
 
 
 def _should_dedup_ip(ip: str) -> bool:
@@ -104,11 +292,11 @@ class Registry:
         return list(self._players.values())
 
     def next_player(self, player: Player) -> "Player | None":
-        """The player after `player` in the ring (insertion order, wrapping).
-
-        Ring of one -> the player itself (self-loop / echo, the faithful
-        ring-of-one). Returns None if `player` is no longer connected. Computed
-        fresh each call so the ring re-forms on every join/leave."""
+        """The player after `player` in the ring (insertion order, wrapping), or
+        None if `player` is gone. A **ring of one echoes to self** — a lone peer's
+        OUT comes back to its own IN, so it can read its `0x00` back and become
+        MASTER (the EPIC-01 loopback case). Computed fresh each call (the ring
+        re-forms on every join/leave)."""
         ids = list(self._players)
         if player.id not in self._players:
             return None
@@ -175,6 +363,7 @@ async def handle_player(
         connected_at=asyncio.get_event_loop().time(),
     )
     registry.add(player)
+    _ring.add_player(player.id)
     LOG.info("player %d connected from %s (%d online)", player.id, peer, len(registry))
 
     try:
@@ -186,18 +375,26 @@ async def handle_player(
             # Forward this player's OUT bytes to the next player's IN, verbatim
             # (D-02). Single source per target, so no interleaving.
             target = registry.next_player(player)
-            if target is None:
-                continue
+            # Update the ring view and (when coordinating) get the bytes to forward
+            # with a non-master's demotion 0x00 filtered out (STORY-02).
+            events, forward = _ring.feed(player.id, data)
+            relay_data = forward if _coordinate else data
+            if _inspect:
+                note = ""
+                if _coordinate and len(forward) != len(data):
+                    note = f"  [coordinator dropped {len(data) - len(forward)} demote 0x00]"
+                LOG.info("inspect p%d(%s) -> p%s: %s | %s%s", player.id, peer,
+                         target.id if target else "-", data.hex(" "),
+                         " ".join(events), note)
+            if target is None or not relay_data:
+                continue  # no ring peer yet (lone node), or everything was filtered
             try:
-                target.writer.write(data)
-                if target is player:
-                    await target.writer.drain()  # ring of one: echo to self
-                else:
-                    # Bound the wait so one stuck player can't freeze the ring.
-                    await asyncio.wait_for(
-                        target.writer.drain(), timeout=SLOW_PLAYER_TIMEOUT_S
-                    )
-                target.bytes_in += len(data)
+                target.writer.write(relay_data)
+                # Bound the wait so one stuck player can't freeze the ring.
+                await asyncio.wait_for(
+                    target.writer.drain(), timeout=SLOW_PLAYER_TIMEOUT_S
+                )
+                target.bytes_in += len(relay_data)
             except asyncio.TimeoutError:
                 _drop_player(target, "too slow (write backpressure)")
             except (ConnectionError, OSError):
@@ -208,6 +405,7 @@ async def handle_player(
         LOG.exception("player %d (%s) handler crashed", player.id, peer)
     finally:
         registry.remove(player.id)
+        _ring.remove_player(player.id)
         writer.close()  # don't await wait_closed(): can hang under shutdown-cancel
         LOG.info(
             "player %d (%s) disconnected; %d bytes out / %d in (%d online)",
@@ -232,6 +430,7 @@ def _status_snapshot() -> dict:
         "listen": _listen_addr,
         "players_online": len(players),
         "ring": [p.id for p in players],  # ring order = insertion order, wraps
+        "protocol": _ring.snapshot(),  # EPIC-08: master / phase / last count (read-only)
         "players": [
             {
                 "id": p.id,
@@ -279,6 +478,7 @@ def _status_html() -> bytes:
         "<h1>MIDI-to-IP orchestrator</h1>"
         "<p>uptime {uptime_s}s &middot; game {listen} &middot; players online {players_online}</p>"
         "<p>ring: {ring}</p>"
+        "<p>protocol: phase <b>{phase}</b> &middot; master {master} &middot; last count {last_count}</p>"
         "<table><tr><th>id</th><th>peer</th><th>connected</th>"
         "<th>bytes out</th><th>bytes in</th></tr>{rows}</table>"
         "</body></html>"
@@ -287,6 +487,9 @@ def _status_html() -> bytes:
         listen=html.escape(s["listen"]),
         players_online=s["players_online"],
         ring=ring_str,
+        phase=html.escape(s["protocol"]["phase"]),
+        master=s["protocol"]["master"] if s["protocol"]["master"] is not None else "—",
+        last_count=s["protocol"]["last_count"] if s["protocol"]["last_count"] is not None else "—",
         rows=rows or "<tr><td colspan='5'>(no players)</td></tr>",
     )
     return page.encode("utf-8")
@@ -330,7 +533,7 @@ async def handle_http(
             pass
 
 
-async def serve(host: str, port: int, http_port: int) -> None:
+async def serve(host: str, port: int, http_port: int, enable_http: bool = True) -> None:
     global _started_at, _listen_addr
     loop = asyncio.get_event_loop()
     _started_at = loop.time()
@@ -351,9 +554,15 @@ async def serve(host: str, port: int, http_port: int) -> None:
             pass
 
     game = await asyncio.start_server(handle_player, host, port)
-    http = await asyncio.start_server(handle_http, host, http_port)
-    LOG.info("orchestrator: game on %s:%d, HTTP status on %s:%d",
-             host, port, host, http_port)
+    http = None
+    if enable_http:
+        # HTTP status shares this event loop with the game relay. --no-http drops
+        # it so a status poll can never add jitter to the lock-step ring (C-01).
+        http = await asyncio.start_server(handle_http, host, http_port)
+        LOG.info("orchestrator: game on %s:%d, HTTP status on %s:%d",
+                 host, port, host, http_port)
+    else:
+        LOG.info("orchestrator: game on %s:%d (HTTP status disabled)", host, port)
     try:
         # start_server is already accepting; stay alive until asked to stop.
         await stop
@@ -370,7 +579,8 @@ async def serve(host: str, port: int, http_port: int) -> None:
             except (ConnectionError, OSError):
                 pass
         game.close()
-        http.close()
+        if http is not None:
+            http.close()
 
 
 def main() -> None:
@@ -384,12 +594,30 @@ def main() -> None:
     parser.add_argument(
         "--http-port", type=int, default=8080, help="HTTP status port (default: 8080)"
     )
+    parser.add_argument(
+        "--no-http", action="store_true",
+        help="disable the HTTP status server (rules out status-poll jitter on the "
+             "game relay; C-01)",
+    )
+    parser.add_argument(
+        "--inspect", action="store_true",
+        help="decode + log the MIDI Maze protocol as traffic passes (read-only)",
+    )
+    parser.add_argument(
+        "--coordinate", action="store_true",
+        help="protect the established master: drop a non-master's stray MASTER-ELECT "
+             "0x00 so it can't demote the master mid-count (EPIC-08; off = dumb relay)",
+    )
     args = parser.parse_args()
+    global _inspect, _coordinate
+    _inspect = args.inspect
+    _coordinate = args.coordinate
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
     try:
-        asyncio.run(serve(args.host, args.port, args.http_port))
+        asyncio.run(serve(args.host, args.port, args.http_port,
+                          enable_http=not args.no_http))
     except KeyboardInterrupt:
         LOG.info("shutting down")
 

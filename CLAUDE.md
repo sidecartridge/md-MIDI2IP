@@ -6,9 +6,9 @@ See also: `programming.md` (full shared-region table and budget rules), `README.
 
 ## What this repo is
 
-**MIDI-to-IP** is a **Sidecartridge Multi-device microfirmware app** for Atari ST / STE / MegaST(E) that redirects all MIDI IN and OUT traffic from the Atari to a network endpoint, by hooking the BIOS and XBIOS calls. It ships as a UF2 image that runs on a Raspberry Pi Pico (RP2040) plugged into the Multi-device cartridge slot, emulating a ROM cartridge for the Atari while also handling networking, SD card I/O, and config. Public build/usage docs for the platform are at <https://docs.sidecartridge.com/sidecartridge-multidevice/programming/>.
+**MIDI-to-IP** is a **Sidecartridge Multi-device microfirmware app** for Atari ST / STE / MegaST(E) that redirects all MIDI IN and OUT traffic from the Atari to a network endpoint, by hooking the BIOS device-3 calls. It ships as a UF2 image that runs on a Raspberry Pi Pico (RP2040) plugged into the Multi-device cartridge slot, emulating a ROM cartridge for the Atari while also handling networking, SD card I/O, and config. Public build/usage docs for the platform are at <https://docs.sidecartridge.com/sidecartridge-multidevice/programming/>.
 
-> Status: `v1.0.0alpha`. The MIDI hooking logic lives in `target/atarist/src/userfw.s` (the m68k user-firmware module) and the RP-side handler is registered via `chandler_addCB` in `emul.c`; the default `userfw.s` body is still the Cconws demo stub until the MIDI path is implemented.
+> Status: `v1.0.0alpha`. The MIDI hooking logic lives in `target/atarist/src/userfw.s` (the m68k user-firmware module) and the RP-side handler is registered via `chandler_addCB` in `emul.c`. The BIOS hook *is* the MIDI device: it services `Bconstat`/`Bconin`/`Bconout` (device 3) directly against the RP's network IN/OUT queues — MIDI Maze does all its MIDI ring I/O through those BIOS calls (not XBIOS, no Iorec).
 
 ## Build
 
@@ -53,7 +53,7 @@ The firmware is a **two-target build**: m68k assembly that runs on the Atari ST 
 
 ### Atari ST side (`target/atarist/`)
 - `src/main.s` — m68k cartridge boot + dispatch + terminal. Lives at `$FA0000` in the ST address space (ROM4 cartridge region). Defines the cartridge header (`CA_MAGIC`, `CA_INIT`, …), command magic numbers, and the shared-variable layout used to talk to the RP2040.
-- `src/userfw.s` — **the primary extension point for app-specific m68k code.** `src/userfw.ld` places `main.s` at offset `0x0000` (2 KB budget) and `userfw.s` at offset `0x0800` (6 KB budget); `main.s` exposes the latter as `USERFW equ (ROM4_ADDR + $800)`. When the RP-side terminal command `f` ([F]irmware) is selected, the RP writes `CMD_START = 4` to the cartridge sentinel; the m68k's vsync-polled `check_commands` dispatches to `rom_function`, which `jmp`s to `USERFW`. The default `userfw.s` is a Cconws demo — replace its body with your own logic.
+- `src/userfw.s` — **the primary extension point for app-specific m68k code.** `src/userfw.ld` places `main.s` at offset `0x0000` (2 KB budget) and `userfw.s` at offset `0x0800` (6 KB budget); `main.s` exposes the latter as `USERFW equ (ROM4_ADDR + $800)`. When the RP-side terminal command `f` ([F]irmware) is selected, the RP writes `CMD_START = 4` to the cartridge sentinel; the m68k's vsync-polled `check_commands` dispatches to `rom_function`, which `jmp`s to `USERFW`. `userfw.s` holds the MIDI BIOS device-3 hook (it started life as the upstream Cconws demo stub).
 - Adding more m68k modules: add a new `.text_<name>` section in `userfw.ld`, mirror the offset with an `equ (ROM4_ADDR + $????)` in `main.s`, and add the `.o` target to `target/atarist/Makefile` (same pattern as `gemdrive.ld` in `md-drives-emulator`).
 - Built via `stcmd make release` (m68k assembler in Docker); the cartridge image (header + all `.text_*` sections) must fit in 8 KB. A 64 KB padded copy is then converted to `target_firmware.h` for inclusion in the RP build.
 

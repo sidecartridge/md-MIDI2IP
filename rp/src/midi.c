@@ -6,7 +6,7 @@
  * Description: MIDI-to-IP command handler (RP side).
  *
  * EPIC-01 STORY-01: services CMD_MIDI_SAVE_VECTOR. The m68k installs its
- * BIOS/XBIOS trap hooks using the XBRA convention, but the XBRA <old>
+ * BIOS (trap #13) hook using the XBRA convention, but the XBRA <old>
  * field lives in the cartridge ROM, which the m68k can't write. So it
  * hands us the original vector and the field's address; we patch the
  * field in the served ROM image so the m68k handler can chain through it.
@@ -29,21 +29,34 @@
 #include "tprotocol.h"  // TransmissionProtocol, TPROTO_* payload macros
 
 // --- EPIC-02 IN queue ---
-// Bytes the RP owes the m68k. In the loopback, CMD_MIDI_SEND echoes the OUT
-// byte straight in here; CMD_MIDI_RECV drains it into the shared
-// MIDI_IN_BUFFER. (EPIC-03 fills this from the network instead.) Single
-// producer / single consumer, both on the bus loop, so no locking. Size is a
-// power of two.
-#define MIDI_IN_QUEUE_SIZE 1024
+// Bytes the RP owes the m68k: the network recv pushes here, Bconin pops one at
+// a time. Single producer / single consumer, both on the bus loop, so no
+// locking. Size is a power of two and must absorb the largest burst the m68k
+// hasn't drained yet — MIDI Maze's SEND-DATA (the 64x64 maze + options) is well
+// over 4 KB, so the old 1 KB queue dropped bytes; 16 KB gives ample headroom.
+#define MIDI_IN_QUEUE_SIZE 16384
 static uint8_t midiInQueue[MIDI_IN_QUEUE_SIZE];
 static uint16_t midiInHead = 0;  // next write
 static uint16_t midiInTail = 0;  // next read
+
+// DEBUG: command counters — printed once/sec as a rate (commands/s = inverse of
+// per-byte latency) to measure CMD_MIDI_SEND / CMD_MIDI_RECV throughput.
+static uint32_t midiCmdSend = 0;
+static uint32_t midiCmdRecv = 0;
 
 static inline void __not_in_flash_func(midi_in_push)(uint8_t b) {
   uint16_t next = (uint16_t)((midiInHead + 1) & (MIDI_IN_QUEUE_SIZE - 1));
   if (next == midiInTail) return;  // full: drop
   midiInQueue[midiInHead] = b;
   midiInHead = next;
+}
+
+// Publish the IN-queue depth to the shared region so the m68k's Bconstat(3)
+// can read it without a command (the hook IS the MIDI device — EPIC-08).
+static inline void __not_in_flash_func(midi_publish_depth)(void) {
+  uint16_t depth = (uint16_t)((midiInHead - midiInTail) & (MIDI_IN_QUEUE_SIZE - 1));
+  WRITE_AND_SWAP_LONGWORD((unsigned int)&__rom_in_ram_start__, MIDI_IN_COUNT_OFFSET,
+                          depth);
 }
 
 // --- EPIC-03 STORY-01: TCP client to the orchestrator ---
@@ -54,9 +67,8 @@ static inline void __not_in_flash_func(midi_in_push)(uint8_t b) {
 // DEV: set MIDI_NET_HOST to the machine running the echo peer (see the EPIC-03
 // STORY-05 echo server). The RP is a raw-TCP client (lwIP NO_SYS poll mode), so
 // everything below runs from the main loop / lwIP poll context — no locking.
-// #define MIDI_NET_HOST "0.0.0.0"  // placeholder — set to the orchestrator's
-// IP for dev; EPIC-04 makes it configurable
-#define MIDI_NET_HOST "192.168.1.41"
+// Placeholder — set to the orchestrator's IP for dev; EPIC-04 makes it configurable.
+#define MIDI_NET_HOST "0.0.0.0"
 #define MIDI_NET_PORT 5005
 #define MIDI_NET_BACKOFF_MIN_MS 500   // first reconnect delay
 #define MIDI_NET_BACKOFF_MAX_MS 8000  // backoff cap
@@ -78,7 +90,10 @@ static absolute_time_t midiNetUpSince;  // when the current UP session connected
 // Discard pending IN bytes. On a link drop they're stale, and the m68k must not
 // inject them after a reconnect (STORY-04 defined reset behaviour). Single
 // consumer/producer on the bus loop, so the index assignment is atomic enough.
-static void midi_net_flush_in_queue(void) { midiInTail = midiInHead; }
+static void midi_net_flush_in_queue(void) {
+  midiInTail = midiInHead;
+  midi_publish_depth();
+}
 
 // Drop the PCB, flush stale IN bytes, and go DOWN. Safe from any callback.
 static void midi_net_reset(void) {
@@ -116,6 +131,7 @@ static err_t midi_net_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
       midi_in_push(bytes[i]);
     }
   }
+  midi_publish_depth();  // let the m68k's Bconstat see the new bytes
   tcp_recved(pcb, p->tot_len);
   pbuf_free(p);
   return ERR_OK;
@@ -199,6 +215,17 @@ static void midi_net_update_led(void) {
 // the backoff resets on a successful connect.
 void midi_net_poll(void) {
   midi_net_update_led();
+  // DEBUG: once/sec, print the command rate (= bytes/sec each way).
+  static absolute_time_t cmdStatAt = {0};
+  static uint32_t lastSend = 0, lastRecv = 0;
+  if (absolute_time_diff_us(get_absolute_time(), cmdStatAt) <= 0) {
+    DPRINTF("MIDI cmd/s: SEND=%lu RECV=%lu\n",
+            (unsigned long)(midiCmdSend - lastSend),
+            (unsigned long)(midiCmdRecv - lastRecv));
+    lastSend = midiCmdSend;
+    lastRecv = midiCmdRecv;
+    cmdStatAt = make_timeout_time_ms(1000);
+  }
   if (midiNetState != MIDI_NET_DOWN) {
     return;
   }
@@ -282,23 +309,25 @@ static void __not_in_flash_func(midi_command_cb)(TransmissionProtocol *protocol,
       uint32_t b =
           TPROTO_GET_PAYLOAD_PARAM32(payloadPtr);  // d3, byte in low 8 bits
       midi_net_send_byte((uint8_t)(b & 0xFFu));
+      midiCmdSend++;  // DEBUG
       break;
     }
     case CMD_MIDI_RECV: {
-      // Drain up to MIDI_IN_BUFFER_SIZE pending bytes into the shared buffer
-      // (byte-swapped per 16-bit word so the m68k reads them in order), then
-      // write the count. Same shape as GEMDRIVE's READ_BUFFER / READ_BYTES.
-      uint8_t *buf = (uint8_t *)((unsigned int)&__rom_in_ram_start__ +
-                                 MIDI_IN_BUFFER_OFFSET);
-      uint16_t n = 0;
-      while (n < MIDI_IN_BUFFER_SIZE && midiInTail != midiInHead) {
-        buf[n++] = midiInQueue[midiInTail];
+      midiCmdRecv++;  // DEBUG
+      // Bconin(3): pop ONE byte (if any) into the shared byte slot, in the low
+      // 8 bits of the longword the m68k reads. Bconstat reads the depth (kept
+      // current by midi_publish_depth). The m68k spins on the depth before
+      // issuing this, so a byte is normally present.
+      uint8_t b = 0;
+      if (midiInTail != midiInHead) {
+        b = midiInQueue[midiInTail];
         midiInTail = (uint16_t)((midiInTail + 1) & (MIDI_IN_QUEUE_SIZE - 1));
       }
-      if (n & 1) buf[n] = 0;  // pad for the 16-bit swap
-      CHANGE_ENDIANESS_BLOCK16(buf, n + (n & 1));
-      WRITE_AND_SWAP_LONGWORD((unsigned int)&__rom_in_ram_start__,
-                              MIDI_IN_COUNT_OFFSET, n);
+      // Write b into all four bytes (raw, no swap) so the m68k reads it whatever
+      // byte/endianness it picks up — rules out a read-side byte-order bug.
+      WRITE_LONGWORD_RAW((unsigned int)&__rom_in_ram_start__,
+                         MIDI_IN_BUFFER_OFFSET, (uint32_t)b * 0x01010101u);
+      midi_publish_depth();
       break;
     }
     default:

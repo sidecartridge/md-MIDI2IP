@@ -1,6 +1,6 @@
 ---
-id: STORY-02
-epic: EPIC-07
+id: STORY-01
+epic: EPIC-10
 title: Automated regression gate (self-test over the full stack)
 status: todo
 milestone: alpha-mvp
