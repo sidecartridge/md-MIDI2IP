@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdio.h>   // snprintf
 #include <stdlib.h>  // strtol
+#include <string.h>  // strcmp
 
 // inclusw in the C file to avoid multiple definitions
 #include "aconfig.h"
@@ -101,6 +102,8 @@ static bool haltCountdown = true;
 static int countdown = 0;
 static absolute_time_t lastDecrement;
 static uint32_t countdownStartSeq = 0;
+// STORY-05: last displayed status signature — re-render the menu only on change.
+static char lastStatusSig[96] = {0};
 
 // Polling tick used as the network poll callback so command handling stays
 // alive during multi-second WiFi operations.
@@ -148,6 +151,27 @@ static void showCounter(int cdown) {
   drawSetupInfoLine(msg);
 }
 
+// EPIC-06 STORY-05: the only on-screen status we keep — Wi-Fi link, local IP,
+// and the orchestrator connection (everything else from term_printNetworkInfo
+// is dropped).
+static void printMinimalStatus(void) {
+  ip_addr_t ip = network_getCurrentIp();
+  term_printString("Wi-Fi:  ");
+  term_printString(network_wifiConnStatusStr());
+  term_printString("\nIP:     ");
+  term_printString(ip_addr_isany_val(ip) ? "-" : ipaddr_ntoa(&ip));
+  term_printString("\nServer: ");
+  term_printString(midi_net_status_str());
+  term_printString("\n");
+}
+
+// Signature of the displayed status — the menu only re-renders when it changes.
+static void statusSignature(char *buf, size_t len) {
+  ip_addr_t ip = network_getCurrentIp();
+  snprintf(buf, len, "%s|%s|%s", network_wifiConnStatusStr(),
+           ip_addr_isany_val(ip) ? "-" : ipaddr_ntoa(&ip), midi_net_status_str());
+}
+
 static void menu(void) {
   menuScreenActive = true;
   term_setCommandLevel(TERM_COMMAND_LEVEL_SINGLE_KEY);  // single-key menu
@@ -168,8 +192,8 @@ static void menu(void) {
   term_printString("[E] Start firmware | [X] Back to Booster\n");
   term_printString("[S]ettings\n\n");
 
-  // Display network information
-  term_printNetworkInfo();
+  // Minimal status: Wi-Fi, local IP, orchestrator (EPIC-06 STORY-05)
+  printMinimalStatus();
 
   term_printString("\n");
   term_printString("Select an option: ");
@@ -368,6 +392,7 @@ static void init(void) {
   menu();
   showCounter(countdown);  // initial countdown bar
   display_refresh();
+  statusSignature(lastStatusSig, sizeof(lastStatusSig));  // seed change detection
 
   // Example 1: Move the cursor up one line.
   // VT52 sequence: ESC A (moves cursor up)
@@ -631,6 +656,14 @@ void emul_start() {
           haltCountdown = true;
           cmdFirmware(NULL);  // auto-launch firmware on countdown expiry
         } else {
+          // Live status during the countdown: re-render the menu body when it
+          // changes, then redraw the countdown bar (EPIC-06 STORY-05).
+          char sig[96];
+          statusSignature(sig, sizeof(sig));
+          if (strcmp(sig, lastStatusSig) != 0) {
+            snprintf(lastStatusSig, sizeof(lastStatusSig), "%s", sig);
+            menu();
+          }
           showCounter(countdown);
           display_refresh();
         }
@@ -640,8 +673,16 @@ void emul_start() {
       bool hasPendingInput = (input != NULL) && (input[0] != '\0');
       if (!hasPendingInput &&
           (absolute_time_diff_us(get_absolute_time(), menuRefreshTime) <= 0)) {
-        term_refreshMenuLiveInfo();
-        menuRefreshTime = make_timeout_time_ms(MENU_REFRESH_TIME_MS);
+        // STORY-05: re-render only when the live status actually changes.
+        char sig[96];
+        statusSignature(sig, sizeof(sig));
+        if (strcmp(sig, lastStatusSig) != 0) {
+          snprintf(lastStatusSig, sizeof(lastStatusSig), "%s", sig);
+          menu();
+          display_refresh();
+        } else {
+          menuRefreshTime = make_timeout_time_ms(MENU_REFRESH_TIME_MS);
+        }
       }
     }
   }
