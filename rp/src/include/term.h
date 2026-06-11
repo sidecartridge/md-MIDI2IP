@@ -152,15 +152,6 @@ void term_clearInputBuffer(void);
 char *term_getInputBuffer(void);
 
 // Generic commands to be used in the terminal
-// Manage application setttings
-void term_cmdSettings(const char *arg);
-void term_cmdPrint(const char *arg);
-void term_cmdSave(const char *arg);
-void term_cmdErase(const char *arg);
-void term_cmdGet(const char *arg);
-void term_cmdPutInt(const char *arg);
-void term_cmdPutBool(const char *arg);
-void term_cmdPutString(const char *arg);
 void term_printNetworkInfo(void);
 void term_markMenuPromptCursor(void);
 void term_refreshMenuLiveInfo(void);

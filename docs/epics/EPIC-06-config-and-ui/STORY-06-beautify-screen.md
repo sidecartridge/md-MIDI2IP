@@ -2,7 +2,7 @@
 id: STORY-06
 epic: EPIC-06
 title: Beautify the screen
-status: todo
+status: in-progress
 ---
 
 ## Goal
