@@ -26,7 +26,6 @@
 #include "network.h"
 #include "reset.h"
 #include "romemul.h"
-#include "sdcard.h"
 #include "select.h"
 #include "tprotocol.h"
 
@@ -742,15 +741,6 @@ void term_printNetworkInfo(void) {
   snprintf(sdStatus, sizeof(sdStatus), "Not mounted");
   snprintf(sdSpace, sizeof(sdSpace), "N/A");
 
-  uint32_t sdTotalMb = 0;
-  uint32_t sdFreeMb = 0;
-  if (sdcard_getMountedInfo(&sdTotalMb, &sdFreeMb)) {
-    snprintf(sdStatus, sizeof(sdStatus), "Mounted");
-    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB free",
-             (unsigned long)sdFreeMb, (unsigned long)sdTotalMb);
-  } else if (sdcard_isMounted()) {
-    snprintf(sdStatus, sizeof(sdStatus), "Error");
-  }
 
   term_printString("Network status: ");
 
@@ -933,15 +923,6 @@ static bool term_buildLiveMenuLines(char *ssidLine, size_t ssidLineSize,
   snprintf(sdStatus, sizeof(sdStatus), "Not mounted");
   snprintf(sdSpace, sizeof(sdSpace), "N/A");
 
-  uint32_t sdTotalMb = 0;
-  uint32_t sdFreeMb = 0;
-  if (sdcard_getMountedInfo(&sdTotalMb, &sdFreeMb)) {
-    snprintf(sdStatus, sizeof(sdStatus), "Mounted");
-    snprintf(sdSpace, sizeof(sdSpace), "%lu/%lu MB free",
-             (unsigned long)sdFreeMb, (unsigned long)sdTotalMb);
-  } else if (sdcard_isMounted()) {
-    snprintf(sdStatus, sizeof(sdStatus), "Error");
-  }
 
 #if defined(CYW43_WL_GPIO_LED_PIN)
   ip_addr_t currentIp = network_getCurrentIp();

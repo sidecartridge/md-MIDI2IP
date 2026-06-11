@@ -21,7 +21,6 @@
 #include "debug.h"
 #include "display.h"
 #include "display_term.h"  // DISPLAY_TERM_CHAR_HEIGHT (countdown bar)
-#include "ff.h"
 #include "gconfig.h"
 #include "memfunc.h"
 #include "midi.h"
@@ -29,7 +28,6 @@
 #include "pico/stdlib.h"
 #include "reset.h"
 #include "romemul.h"
-#include "sdcard.h"
 #include "select.h"
 #include "target_firmware.h"  // Include the target firmware binary
 #include "term.h"
@@ -519,23 +517,8 @@ void emul_start() {
   // files are stored. The folder name is defined in the configuration.
   // If there is no folder in the micro SD card, the app will create it.
 
-  FATFS fsys;
-  SettingsConfigEntry *folder =
-      settings_find_entry(aconfig_getContext(), ACONFIG_PARAM_FOLDER);
-  char *folderName = "/test";  // MODIFY THIS TO YOUR FOLDER NAME
-  if (folder == NULL) {
-    DPRINTF("FOLDER not found in the configuration. Using default value\n");
-  } else {
-    DPRINTF("FOLDER: %s\n", folder->value);
-    folderName = folder->value;
-  }
-  int sdcardErr = sdcard_initFilesystem(&fsys, folderName);
-  if (sdcardErr != SDCARD_INIT_OK) {
-    DPRINTF("SD card unavailable (error %i). Continuing without SD.\n",
-            sdcardErr);
-  } else {
-    DPRINTF("SD card found & initialized\n");
-  }
+  // No SD card: MIDI-to-IP doesn't use it — the SD/FatFs subsystem was removed
+  // (EPIC-06 STORY-03).
 
   // Initialize the display again (in case the terminal emulator changed it)
   display_setupU8g2();

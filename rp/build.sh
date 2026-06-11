@@ -18,20 +18,8 @@ cd pico-extras
 git checkout tags/sdk-2.2.0
 cd ..
 
-echo "Pinning the FatFs SDK versions..."
-cd fatfs-sdk
-#git checkout v3.5.1
-git checkout 6bdb39f96fe8b897aff12bf3416e32515792e318
-cd ..
-
-# FatFs configuration is overridden by rp/src/ff/ffconf.h; the CMake
-# include path puts that directory ahead of the submodule's default copy
-# so we no longer need to sed-patch the submodule on every build (which
-# left fatfs-sdk dirty and unrecordable in the parent commit).
-
 # Set the environment variables of the SDKs
 export PICO_SDK_PATH=$PWD/pico-sdk
-export FATFS_SDK_PATH=$PWD/fatfs-sdk
 export PICO_EXTRAS_PATH=$PWD/pico-extras
 
 # Return to booster path
