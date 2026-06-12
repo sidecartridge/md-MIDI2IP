@@ -142,6 +142,11 @@ WRITE_BUFFER_HIGH = 64 * 1024  # bound per-connection write buffer (bytes)
 # reconnection — even for IP classes exempt from the strict one-per-IP dedup
 # (loopback/NAT). The reconnection always gets a fresh, incremented node id.
 RECONNECT_STALE_S = 10.0
+# Reverse-DNS (PTR) of a connected node's IP — best-effort, off the relay path,
+# bounded by this timeout so a slow/missing resolver never stalls a connection.
+DNS_TIMEOUT_S = 1.0
+_dns_cache: "dict[str, str]" = {}  # ip -> resolved hostname (or the ip on failure)
+_bg_tasks: "set" = set()  # keep background lookups referenced so they aren't GC'd
 
 
 def _enable_keepalive(sock: socket.socket) -> None:
@@ -171,6 +176,7 @@ class Player:
     bytes_out: int = 0  # bytes received FROM the player (their MIDI OUT)
     bytes_in: int = 0  # bytes sent TO the player (their MIDI IN)
     last_active: float = 0.0  # event-loop time of the last byte received (liveness)
+    host: str = ""  # reverse-DNS name (STORY-03); falls back to the IP
     inspector: "MidiMazeInspector | None" = None  # per-player --inspect decoder
 
 
@@ -229,6 +235,30 @@ def _is_stalled(player: Player, now: float) -> bool:
     return (now - player.last_active) > RECONNECT_STALE_S
 
 
+async def _resolve_host(player: Player) -> None:
+    """Best-effort reverse-DNS (PTR) of the player's IP into player.host. Runs off
+    the relay path and is bounded by DNS_TIMEOUT_S, so a slow or missing resolver
+    never stalls a connection or the event loop. Cached per IP; on any failure the
+    host stays the IP string (the common case — most LAN/home IPs have no PTR)."""
+    ip = player.ip
+    cached = _dns_cache.get(ip)
+    if cached is not None:
+        player.host = cached
+        return
+    host = ip
+    try:
+        loop = asyncio.get_event_loop()
+        name, _ = await asyncio.wait_for(
+            loop.getnameinfo((ip, 0), socket.NI_NAMEREQD), timeout=DNS_TIMEOUT_S
+        )
+        if name and name != ip:
+            host = name
+    except (asyncio.TimeoutError, socket.gaierror, OSError, ValueError):
+        pass  # no PTR record / timeout / unusable sockaddr — keep the IP
+    _dns_cache[ip] = host
+    player.host = host
+
+
 async def handle_player(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
@@ -275,6 +305,10 @@ async def handle_player(
         last_active=now,
     )
     registry.add(player)
+    player.host = ip  # until the reverse-DNS lookup resolves it
+    task = asyncio.ensure_future(_resolve_host(player))  # best-effort PTR, off the relay
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
     if _inspect:
         player.inspector = MidiMazeInspector()
     LOG.info("player %d connected from %s (%d online)", player.id, peer, len(registry))
@@ -341,6 +375,7 @@ def _status_snapshot() -> dict:
             {
                 "id": p.id,
                 "peer": p.peer,
+                "host": p.host,
                 "connected_s": int(now - p.connected_at),
                 "bytes_out": p.bytes_out,
                 "bytes_in": p.bytes_in,

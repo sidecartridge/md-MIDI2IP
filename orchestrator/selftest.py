@@ -116,6 +116,8 @@ def main() -> int:
         check("ring has 2 entries", len(st["ring"]) == 2)
         check("players have byte counters",
               all("bytes_out" in p and "bytes_in" in p for p in st["players"]))
+        check("players have a host field (reverse-DNS / ip fallback)",
+              all(p.get("host") for p in st["players"]))
 
         print("drop + reconnect:")
         a.close()
