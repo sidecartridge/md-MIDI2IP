@@ -68,8 +68,8 @@ static uint32_t midiOutDrop = 0;  // DEBUG: ring-full drops (should stay 0)
 static absolute_time_t midiInLastDrain;
 static absolute_time_t midiOutLastDrain;
 
-// DEBUG: command counters — printed once/sec as a rate (commands/s = inverse of
-// per-byte latency) to measure CMD_MIDI_SEND / CMD_MIDI_RECV throughput.
+// DEBUG: fast-path byte counters — printed once/sec as a rate (the MIDI/s trace,
+// currently #if 0). midiCmdSend = OUT bytes, midiCmdRecv = IN advances.
 static uint32_t midiCmdSend = 0;
 static uint32_t midiCmdRecv = 0;
 static uint32_t midiNetRx =
@@ -168,8 +168,8 @@ static err_t midi_net_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
     pbuf_free(p);
     return err;
   }
-  // STORY-03: push received bytes into the IN queue; CMD_MIDI_RECV drains it
-  // into the shared buffer for the m68k. Opaque bytes (D-02) — no parsing.
+  // Push received bytes into the IN queue; the m68k's Bconin drains the head
+  // one byte at a time via the bit-9 advance. Opaque bytes (D-02) — no parsing.
   for (struct pbuf *q = p; q != NULL; q = q->next) {
     const uint8_t *bytes = (const uint8_t *)q->payload;
     for (uint16_t i = 0; i < q->len; i++) {

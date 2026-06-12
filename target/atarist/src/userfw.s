@@ -25,13 +25,11 @@
 ROM4_ADDR            equ $FA0000
 
 ; --- MIDI app command namespace (must match rp/src/include/midi.h) ---
+; The only MIDI command left is the boot-time save-vector; OUT/IN are the
+; commemul fast path (EPIC-09), so the EPIC-02 per-byte CMD_MIDI_SEND/RECV
+; commands are retired.
 APP_MIDI             equ $0300
 CMD_MIDI_SAVE_VECTOR equ (APP_MIDI + 0)          ; $0300: patch a ROM longword field
-
-; --- EPIC-02 byte pipe (must match rp/src/include/midi.h) ---
-; Dumb transport: ship captured OUT bytes to the RP, pull pending IN bytes back.
-CMD_MIDI_SEND        equ (APP_MIDI + 1)          ; $0301: m68k -> RP, ship OUT bytes
-CMD_MIDI_RECV        equ (APP_MIDI + 2)          ; $0302: m68k -> RP, request IN bytes
 
 ; Shared MIDI-IN fields in the APP_FREE arena, written by the RP and read by the
 ; m68k (which owns no state in the ROM region):
@@ -118,11 +116,14 @@ midi_save_vector:
     rts
 
 ; ---------------------------------------------------------------------
-; BIOS (trap #13) hook, XBRA-wrapped. The hook IS the MIDI device for device 3:
-;   Bconstat(3) -> d0 = -1 if the RP has a pending byte (queue depth > 0) else 0
-;   Bconin(3)   -> pop one byte from the RP (CMD_MIDI_RECV), return it in d0
-;   Bconout(3)  -> ship the byte (CMD_MIDI_SEND), then chain to the real Bconout
-; Bconstat/Bconin are serviced directly (set d0, rte) — no Iorec, no chaining.
+; BIOS (trap #13) hook, XBRA-wrapped. The hook IS the MIDI device for device 3,
+; over the EPIC-09 commemul fast path (no commands, no token wait):
+;   Bconstat(3) -> d0 = pre-baked -1/0 status the RP published (char ready?)
+;   Bconin(3)   -> read the RP-published head byte, fire a bit-9 advance, wait
+;                  for the RP ack, return it in d0
+;   Bconout(3)  -> emit the byte as a single bit-8 ROM3 read (emit-only, the
+;                  network is the sink) — no chain to the physical Bconout
+; Bconstat/Bconin/Bconout are serviced directly (rte) — no Iorec, no ACIA.
 ; Any other device/function chains to the original BIOS untouched.
 ; ---------------------------------------------------------------------
     ds.b ((4 - (* & 3)) & 3)             ; 4-byte align (RP writes <old> as a longword)

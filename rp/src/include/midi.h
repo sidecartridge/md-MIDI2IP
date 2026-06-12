@@ -25,11 +25,8 @@
 // CMD_MIDI_SAVE_VECTOR in userfw.s.
 #define CMD_MIDI_SAVE_VECTOR ((APP_MIDI << 8) | 0x00)  // 0x0300
 
-// --- EPIC-02 byte pipe (must match userfw.s) ---
-// Dumb, app-agnostic transport: the m68k ships captured MIDI-OUT bytes to the
-// RP, and pulls pending MIDI-IN bytes from it. No MIDI semantics live here.
-#define CMD_MIDI_SEND ((APP_MIDI << 8) | 0x01)  // 0x0301: m68k -> RP, ship OUT bytes
-#define CMD_MIDI_RECV ((APP_MIDI << 8) | 0x02)  // 0x0302: m68k -> RP, request IN bytes
+// The EPIC-02 per-byte CMD_MIDI_SEND/RECV commands are retired — OUT/IN now ride
+// the commemul fast path (EPIC-09 STORY-03). Save-vector is the only MIDI command.
 
 // --- EPIC-09 fast-path stream markers (commemul samples, post-XOR; must match
 // userfw.s). The OUT byte streams to the RP as a single ROM3 read; the RP routes

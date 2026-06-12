@@ -2,17 +2,17 @@
 id: EPIC-09
 iteration: 2
 title: Stream MIDI over the commemul ROM3 ring (drop the per-byte command handshake)
-status: in-progress
+status: done
 ---
 
 ## Progress
 
-**The transport works: MIDI Maze is playable multiplayer over IP on real hardware.**
-STORY-01 (OUT), STORY-02 (IN), STORY-04 (overrun/flow-control), STORY-05 (validation)
-are **done**; STORY-03 (retire the dead `CMD_MIDI_SEND`/`CMD_MIDI_RECV` path) is the
-remaining cleanup. Landed in `bfe4429` (transport) + `5567c65` (stale-queue cleanup).
-The two corrections that mattered vs. the original design are folded in below
-(Decision A, Open questions).
+**Done — MIDI Maze is playable multiplayer over IP on real hardware.** All five
+stories complete: OUT byte-stream, IN ring (with confirm-ack), retire the old
+command path, IN/OUT overrun + stale-queue policy, and on-hardware validation.
+Landed in `bfe4429` (transport) + `5567c65` (stale-queue cleanup) + the STORY-03
+command-path removal. The two corrections that mattered vs. the original design are
+folded in below (Decision A, Open questions).
 
 ## Goal
 
@@ -125,15 +125,14 @@ signal still feeds the RP's consumed count for flow control.
 - **Overrun, resolved in practice:** the pressing loss was OUT-side (`Bconout` burst
   overran per-byte `tcp_write`, `OUT > RX`), fixed with an OUT ring drained in the
   poll context. IN drop-on-full + a time-based stale flush cover the IN side.
-- **Still open:** true network backpressure (stop reading the socket on a full IN
-  ring) is not implemented — current policy is drop + stale-flush. Old `CMD_MIDI_*`
-  command path is still present (STORY-03 cleanup).
+- **Still open (deferred):** true network backpressure (stop reading the socket on a
+  full IN ring) is not implemented — current policy is drop + stale-flush.
 
 ## Stories
 
 - **STORY-01** OUT byte-stream (bit 8) — **done**
 - **STORY-02** IN ring + bit-9 advance, with confirm-ack — **done**
-- **STORY-03** retire the per-byte `CMD_MIDI_*` path — **todo** (remaining cleanup)
+- **STORY-03** retire the per-byte `CMD_MIDI_*` path — **done**
 - **STORY-04** IN/OUT overrun, flow-control & stale-queue policy — **done**
 - **STORY-05** on-hardware throughput + 2-node game validation — **done** (playable)
 
