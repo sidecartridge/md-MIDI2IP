@@ -2,7 +2,7 @@
 id: EPIC-11
 iteration: 2
 title: Orchestrator revamp — dumb relay + ring observability
-status: done
+status: in-progress
 ---
 
 ## Goal
@@ -45,6 +45,7 @@ proper telemetry feed + a real visualization instead of a static HTML dump.
 - **STORY-03** Reverse-DNS the connected node hostnames
 - **STORY-04** Per-node telemetry in `status.json` (IP, host, bytes in/out)
 - **STORY-05** Revamped ring-visualization HTML page (polls `status.json` every 2 s)
+- **STORY-06** Document end-user usage in README.md (Multi-device RP2040 + Hatari)
 
 ## Constraints (must preserve)
 
