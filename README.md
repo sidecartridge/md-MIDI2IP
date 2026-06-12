@@ -130,6 +130,24 @@ orchestrator**:
 4. In MIDI Maze, run master election / count players and start the game; all nodes play
    over IP.
 
+## 🙏 Acknowledgements
+
+- **Jesús Ángel González Gorrado** — his *Trabajo Fin de Grado* is a great piece of work
+  reverse-engineering the MIDI Maze protocol. It's what made me realize the MIDI-to-IP
+  microfirmware was doable.
+  [TAZ-TFG-2022-4616.pdf](https://zaguan.unizar.es/record/146840/files/TAZ-TFG-2022-4616.pdf)
+
+- **Markus Fritze ([@sarnau](https://github.com/sarnau))** — author of MIDI Maze II and an
+  expert in MIDI Maze. While I knew about his work and his support for the Atari ST scene,
+  I did not use any of it in this project *"intentionally"*. And I say "intentionally"
+  because at the end of Iteration 2 I realized that Claude Code had started delivering very
+  cool ASCII details about the MIDI Maze map format — and digging into the sources and why
+  they use that ASCII format, I figured out that the AI was clearly trained on Markus's
+  work. I wish I'd known this repo when I started:
+  [AtariST-MIDIMaze-Source](https://github.com/sarnau/AtariST-MIDIMaze-Source) — it
+  probably would have saved me a lot of back-and-forth with Claude Code. And tokens!
+  Thank you, Markus!
+
 ## 📄 License
 
 The source code of the project is licensed under the GNU General Public License v3.0. The full license is accessible in the [LICENSE](LICENSE) file.
