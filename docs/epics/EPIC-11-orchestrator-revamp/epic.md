@@ -2,7 +2,7 @@
 id: EPIC-11
 iteration: 2
 title: Orchestrator revamp — dumb relay + ring observability
-status: todo
+status: in-progress
 ---
 
 ## Goal
