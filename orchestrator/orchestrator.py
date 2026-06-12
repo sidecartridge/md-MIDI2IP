@@ -364,6 +364,17 @@ async def handle_player(
 
 
 def _status_snapshot() -> dict:
+    """Race-free status snapshot, read from the asyncio loop. Schema (status.json):
+
+      uptime_s, listen, players_online   server-level fields
+      ring        [player id, ...] in ring order — the relay forwards each node's
+                  OUT to the *next* id, wrapping (a lone node echoes to itself)
+      players     [ {id, ip, host, peer, connected_s, idle_s, bytes_out, bytes_in},
+                    ... ] in ring order. bytes_out = received FROM the node (its
+                  MIDI OUT); bytes_in = sent TO the node (its MIDI IN); idle_s =
+                  seconds since the node's last byte (UI can dim a stalled node).
+
+    The HTML ring view (STORY-05) and any external tooling rely on this shape."""
     now = asyncio.get_event_loop().time()
     players = registry.players()
     return {
@@ -374,9 +385,11 @@ def _status_snapshot() -> dict:
         "players": [
             {
                 "id": p.id,
-                "peer": p.peer,
+                "ip": p.ip,
                 "host": p.host,
+                "peer": p.peer,
                 "connected_s": int(now - p.connected_at),
+                "idle_s": int(now - p.last_active),
                 "bytes_out": p.bytes_out,
                 "bytes_in": p.bytes_in,
             }

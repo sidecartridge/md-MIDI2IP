@@ -118,6 +118,10 @@ def main() -> int:
               all("bytes_out" in p and "bytes_in" in p for p in st["players"]))
         check("players have a host field (reverse-DNS / ip fallback)",
               all(p.get("host") for p in st["players"]))
+        check("per-node telemetry has ip + idle_s (STORY-04)",
+              all("ip" in p and "idle_s" in p for p in st["players"]))
+        check("players listed in ring order",
+              st["ring"] == [p["id"] for p in st["players"]])
 
         print("drop + reconnect:")
         a.close()
