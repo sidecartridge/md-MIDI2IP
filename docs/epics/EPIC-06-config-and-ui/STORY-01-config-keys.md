@@ -13,10 +13,10 @@ editable at runtime.
 
 ## Tasks
 
-- [x] Add keys: `MIDI_HOST`, `MIDI_PORT`, `MIDI_ENABLED` (transport fixed to TCP — D-03; physical-port passthrough deferred — D-07)
+- [x] Add keys: `MIDI_HOST`, `MIDI_PORT`, `MIDI_ENABLED` (transport fixed to TCP per D-03; physical-port passthrough deferred per D-07)
 - [x] Provide sensible defaults in `aconfig` init (host `0.0.0.0`, port `5005`, enabled `true`)
 - [x] Load on startup and apply (`midi_init` reads them; `midi_net_poll` gates the connection on `MIDI_ENABLED`)
-- [x] Persist to `CONFIG_FLASH` — `aconfig_init` writes the defaults; `settings_save` (Core0-safe) persists edits (the edit UI is STORY-04)
+- [x] Persist to `CONFIG_FLASH`: `aconfig_init` writes the defaults; `settings_save` (Core0-safe) persists edits (the edit UI is STORY-04)
 
 ## Acceptance
 

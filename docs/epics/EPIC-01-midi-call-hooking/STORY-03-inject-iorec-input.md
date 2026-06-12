@@ -8,14 +8,14 @@ milestone: alpha-mvp
 
 > **Superseded:** this story delivered input by injecting into the system
 > `Iorec(2)` buffer. The BIOS hook now serves `Bconin`/`Bconstat` **directly**
-> from the RP queue — no Iorec at all (D-05). The body below is the original
+> from the RP queue, with no Iorec at all (D-05). The body below is the original
 > record.
 
 ## Goal
 
 Deliver bytes to MIDI Maze by writing them into the **system MIDI input record**
 (`Iorec(2)`). Both `Bconin(3)` and the XBIOS readback consume that buffer, so
-feeding it serves every read path MIDI Maze uses — without us having to know
+feeding it serves every read path MIDI Maze uses, without requiring knowledge of
 which one it picks (resolves the D-05 input question in practice).
 
 ## Tasks
@@ -33,7 +33,7 @@ reports it, and a read returns it in order. Confirmed on hardware via the loopba
 
 ## Notes
 
-The advance-first ordering matters — TOS readers advance the tail then read at the
+The advance-first ordering matters. TOS readers advance the tail then read at the
 new tail, so storing then advancing would be off by one. There's no read path to
 hook directly: populating the shared `Iorec` buffer covers Bconin *and* the XBIOS
 readback at once.

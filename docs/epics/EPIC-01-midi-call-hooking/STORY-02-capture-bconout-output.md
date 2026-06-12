@@ -10,7 +10,7 @@ milestone: alpha-mvp
 
 From the BIOS (`trap #13`) hook, intercept `Bconout` with device 3 (MIDI) and
 read the byte MIDI Maze is sending, so it can be fed into the local loopback
-(STORY-04) — and later the OUT ring (EPIC-02).
+(STORY-04) and later the OUT ring (EPIC-02).
 
 ## Tasks
 
@@ -22,12 +22,12 @@ read the byte MIDI Maze is sending, so it can be fed into the local loopback
 ## Acceptance
 
 A MIDI byte written by `Bconout(3)` is read correctly by the hook; everything
-else (screen, keyboard) behaves identically. Confirmed on hardware — the first
+else (screen, keyboard) behaves identically. Confirmed on hardware: the first
 captured byte was `0x00`, MIDI Maze's master-election request.
 
 ## Notes
 
 The arg-access prologue is the md-drives-emulator pattern. Device 2 (served by
-the same BIOS wrapper) carries console/keyboard/screen — must pass through.
+the same BIOS wrapper) carries console/keyboard/screen and must pass through.
 `Bcostat` back-pressure isn't needed for the local loopback (no ring to fill);
 it lands in EPIC-02 when the OUT ring can back up.

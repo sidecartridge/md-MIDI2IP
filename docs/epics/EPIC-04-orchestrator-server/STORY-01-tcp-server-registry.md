@@ -26,6 +26,6 @@ byte counters; disconnects are reflected promptly. No third-party imports.
 ## Notes
 
 `tools/echo_peer.py` is the reference for socket setup (REUSEADDR, NODELAY,
-keepalive). asyncio is stdlib — satisfies the no-external-libraries rule and
-matches D-08. Bytes are opaque (D-02) — this story doesn't move them between
+keepalive). asyncio is stdlib, satisfies the no-external-libraries rule, and
+matches D-08. Bytes are opaque (D-02); this story doesn't move them between
 players yet (that's STORY-02).

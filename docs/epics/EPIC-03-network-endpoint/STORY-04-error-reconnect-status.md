@@ -24,5 +24,5 @@ status reflects each transition; no byte corruption after recovery.
 ## Notes
 
 Backoff resets to the minimum on a successful connect. The IN-queue flush is the
-"defined reset behaviour" — each session starts clean. Pairs with STORY-05's
+"defined reset behaviour": each session starts clean. Pairs with STORY-05's
 mid-handshake reconnect-recovery check.

@@ -24,5 +24,5 @@ A connected node whose IP has a PTR record shows its hostname (the IP otherwise)
 
 ## Notes
 
-Best-effort and fully off the relay path. Most LAN/home IPs won't have a PTR record —
-the IP fallback must be graceful and the common case.
+Best-effort and fully off the relay path. Most LAN/home IPs won't have a PTR record,
+so the IP fallback must be graceful and the common case.

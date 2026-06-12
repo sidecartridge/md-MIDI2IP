@@ -1,12 +1,12 @@
 # Orchestrator ring-router contract
 
 The orchestrator is a Python `asyncio` server (D-03/D-08) built **in this repo**
-under `orchestrator/` (**EPIC-04**, Python 3 stdlib only — revises the earlier
+under `orchestrator/` (**EPIC-04**, Python 3 stdlib only, revising the earlier
 "separate repo" plan, D-04/D-10). This document is the shared *contract* between
 the two sides: the wire format and the ring semantics the firmware (EPIC-03)
 depends on and the server (EPIC-04) implements.
 
-It captures decisions D-02 (raw bytes), D-03 (TCP), D-04 (ring tioopology),
+It captures decisions D-02 (raw bytes), D-03 (TCP), D-04 (ring topology),
 D-08 (raw sockets, no host MIDI), and constraint C-01 (lock-step latency).
 
 ## The boundary
@@ -21,9 +21,9 @@ orchestrator. That connection is the entire interface:
 ```
 
 - **This repo (firmware):** turns MIDI Maze's BIOS device-3 MIDI I/O into one
-  bidirectional raw byte stream over TCP. It knows nothing about the ring — "what
+  bidirectional raw byte stream over TCP. It knows nothing about the ring: "what
   I write is my MIDI OUT, what I read is my MIDI IN."
-- **Orchestrator repo:** holds all players, forms the ring, and routes the bytes.
+- **Orchestrator repo:** holds all players and routes byte streams between them via a ring.
 
 ## Wire format
 
@@ -31,7 +31,7 @@ orchestrator. That connection is the entire interface:
 - **Raw, opaque bytes** (D-02): exactly the bytes MIDI Maze writes/reads. No
   framing, length prefixes, MIDI parsing, or protocol layer on either side.
 - **In-order, lossless, byte-exact**: TCP guarantees it; the orchestrator must not
-  reorder, drop, dedupe, or coalesce in a way that changes byte order — a single
+  reorder, drop, dedupe, or coalesce in a way that changes byte order. A single
   lost/reordered byte desyncs the game.
 
 ## Ring semantics (orchestrator side)
@@ -56,7 +56,7 @@ MIDI Maze is **lock-step** (C-01): every write is followed by a synchronous
 MIDI-IN readback, and frame rate is bounded by ring-speed. Therefore:
 
 - The orchestrator must forward each byte to the next hop with **minimal added
-  latency** — no batching that adds delay beyond a few ms.
+  latency**, adding no batching delay beyond a few ms.
 - Per-hop turnaround should match or beat the original physical ring
   (~hundreds of µs/hop at 31250 baud); we have headroom because the firmware
   intercepts before the ACIA (EPIC-07 STORY-01).
@@ -66,17 +66,17 @@ MIDI-IN readback, and frame rate is bounded by ring-speed. Therefore:
 
 | Concern | Firmware (this repo) | Orchestrator (other repo) |
 | --- | --- | --- |
-| Capture/inject MIDI bytes at the Atari | ✅ EPIC-01 | — |
+| Capture/inject MIDI bytes at the Atari | ✅ EPIC-01 | N/A |
 | Raw byte stream over TCP+NODELAY | ✅ EPIC-03 | ✅ |
-| Ring wiring OUT(N)→IN(N+1), close loop | — | ✅ |
+| Ring wiring OUT(N)→IN(N+1), close loop | N/A | ✅ |
 | Master-election / COUNT-PLAYERS behaviour | passes bytes through, opaque | emerges from correct ring routing |
-| Ring position assignment / membership | — | ✅ |
-| Game-start gating, join/leave between games | — | ✅ |
+| Ring position assignment / membership | N/A | ✅ |
+| Game-start gating, join/leave between games | N/A | ✅ |
 | Low-latency forwarding | minimal coalescing (EPIC-03 STORY-02) | minimal forwarding latency |
 
 ## MVP vs later
 
-- **Alpha MVP:** 2 players. The ring of 2 is the simplest case — each player's OUT
+- **Alpha MVP:** 2 players. The ring of 2 is the simplest case: each player's OUT
   goes to the other's IN. Connection-order assigns ring position; no lobby.
 - **Post-MVP:** full ring of up to 16 entities (humans + drones), a lobby/room
   concept, reconnect/rejoin between games.
@@ -85,7 +85,7 @@ MIDI-IN readback, and frame rate is bounded by ring-speed. Therefore:
 
 - **Player identity / rooms:** MVP can assign ring position purely by connection
   order (no control messages, keeping the stream pure). Multi-room play later
-  needs *some* out-of-band association at connect — decide whether that's a tiny
+  needs *some* out-of-band association at connect. Decide whether that's a tiny
   pre-stream handshake or external configuration, without polluting the byte
   stream (D-02).
 - **Readback timing:** whether MIDI Maze's post-write readback blocks or
@@ -93,5 +93,5 @@ MIDI-IN readback, and frame rate is bounded by ring-speed. Therefore:
   the firmware must block the read locally until the network byte is ready; the
   orchestrator's turnaround budget tightens accordingly.
 - **Disconnect mid-game:** a dropped player breaks the ring. Define whether the
-  orchestrator ends the game, or holds/heals the ring — almost certainly "end the
-  game, re-form between games" for the alpha.
+  orchestrator ends the game or holds/heals the ring. For the alpha, "end the
+  game, re-form between games" is almost certainly correct.

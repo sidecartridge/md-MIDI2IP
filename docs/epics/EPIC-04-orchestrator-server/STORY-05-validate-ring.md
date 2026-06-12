@@ -1,7 +1,7 @@
 ---
 id: STORY-05
 epic: EPIC-04
-title: Validate — two clients form a ring and exchange bytes
+title: Validate: two clients form a ring and exchange bytes
 status: done
 milestone: alpha-mvp
 ---
@@ -26,6 +26,6 @@ the HTTP status accurately reflects the live state.
 
 ## Notes
 
-This validates the *transport server*, not gameplay — real MIDI Maze validation
+This validates the *transport server*, not gameplay. Real MIDI Maze validation
 arrives when a real player (ST+RP, or the EPIC-05 Hatari gateway) joins the ring.
 A throwaway Python test client is enough here.

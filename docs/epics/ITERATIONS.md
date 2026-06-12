@@ -1,33 +1,33 @@
 # Iterations
 
-Epics are grouped into **iterations** — a time-boxed pass with a single overarching
+Epics are grouped into **iterations**: a time-boxed pass with a single overarching
 goal. Each epic carries an `iteration: N` field in its frontmatter; the cockpit
 ([`STATUS.md`](STATUS.md)) groups epics under their iteration. This file is the
 narrative: the goal, scope, and **outcome** of each iteration.
 
 | Iteration | Theme | Status |
 | --- | --- | --- |
-| 1 | Architecture spike — build the full stack end to end | done |
+| 1 | Architecture spike: build the full stack end to end | done |
 | 2 | Transport redesign, HW re-validation + orchestrator revamp | done |
 
 ---
 
-## Iteration 1 — Architecture spike
+## Iteration 1: Architecture spike
 
-**Goal:** stand up the entire MIDI-to-IP path end to end — BIOS device-3 hooking
+**Goal:** stand up the entire MIDI-to-IP path end to end: BIOS device-3 hooking
 (EPIC-01), the shared-region transport (EPIC-02), the network endpoint (EPIC-03),
 the orchestrator (EPIC-04), the Hatari software peer (EPIC-05), config/UI
-(EPIC-06), hardware validation (EPIC-07), and match coordination (EPIC-08) —
-and find out whether the architecture can actually carry a MIDI Maze match.
+(EPIC-06), hardware validation (EPIC-07), and match coordination (EPIC-08).
+Find out whether the architecture can actually carry a MIDI Maze match.
 
-**Outcome:** the stack works end to end — bytes flow byte-exact ST↔RP↔network↔
+**Outcome:** the stack works end to end: bytes flow byte-exact ST↔RP↔network↔
 orchestrator, master election/COUNT-PLAYERS round-trips, the Hatari gateway joins
 as a real player, and the orchestrator's protocol-aware coordination layer
-(`RingState` + `--coordinate`) is built and self-tested. **But the spike found a
-fundamental flaw: [D-12](DECISIONS.md) — the per-byte m68k↔RP command handshake
+(`RingState` + `--coordinate`) is built and self-tested. **The spike found a
+fundamental flaw: [D-12](DECISIONS.md), the per-byte m68k↔RP command handshake
 caps throughput at ~970 bytes/s, ~3× slower than the original 31250-baud MIDI
 ring, and it can't be tuned away** (making `chandler_loop` eager didn't move it).
-That is the decisive result of the iteration: the *architecture* is proven, the
+That is the decisive result of the iteration: the *architecture* is proven; the
 *transport* needs replacing.
 
 **Epics**
@@ -44,32 +44,32 @@ That is the decisive result of the iteration: the *architecture* is proven, the
 | EPIC-08 · Match coordination | done | coordinator + single-node Hatari validation done (HW match → EPIC-10) |
 
 **Carried to Iteration 2 (now EPIC-10 · Hardware validation II):** the two
-validation stories that can only run after the transport fix — a full 2-player
-match on the **RP-hardware** path (was EPIC-08 STORY-04) and the automated CI gate
-(was EPIC-07 STORY-02). Both wait on D-12. The pieces that *don't* hit D-12 are
-already validated in Iteration 1: the Hatari-gateway match (EPIC-05 STORY-04) and
-the smart orchestrator single-node against a real client (EPIC-08 STORY-04).
+validation stories that can only run after the transport fix. These are: a full
+2-player match on the **RP-hardware** path (was EPIC-08 STORY-04) and the automated
+CI gate (was EPIC-07 STORY-02). Both wait on D-12. The pieces that don't hit D-12
+are already validated in Iteration 1: the Hatari-gateway match (EPIC-05 STORY-04)
+and the smart orchestrator single-node against a real client (EPIC-08 STORY-04).
 
 ---
 
-## Iteration 2 — Transport redesign + orchestrator revamp
+## Iteration 2: Transport redesign + orchestrator revamp
 
 **Goal:** kill the per-byte handshake (D-12) so throughput beats the physical MIDI
-ring and validate a full match for real, then — with the firmware now owning the
-ring — revamp the orchestrator into a dumb relay with real observability.
+ring and validate a full match for real, then revamp the orchestrator into a dumb
+relay with real observability now that the firmware owns the ring.
 
 **Epics**
 
 | Epic | Status | Note |
 | --- | --- | --- |
-| EPIC-09 · Stream MIDI over the commemul ROM3 ring | done | D-12 fixed — MIDI Maze playable over IP on hardware |
+| EPIC-09 · Stream MIDI over the commemul ROM3 ring | done | D-12 fixed: MIDI Maze playable over IP on hardware |
 | EPIC-10 · Hardware validation II | done | 2-player HW match validated by playable gameplay; build CI gate green |
-| EPIC-11 · Orchestrator revamp — dumb relay + observability | done | RingState retired (`--inspect` kept); per-node `status.json` telemetry + SVG ring-viz HTML; reverse-DNS; reconnection node recycling |
+| EPIC-11 · Orchestrator revamp: dumb relay + observability | done | RingState retired (`--inspect` kept); per-node `status.json` telemetry + SVG ring-viz HTML; reverse-DNS; reconnection node recycling |
 
-**Outcome:** EPIC-09 landed — the per-byte handshake is gone (the commemul fast path:
+**Outcome:** EPIC-09 landed: the per-byte handshake is gone (the commemul fast path:
 bit-8 OUT, bit-9 IN + confirm-ack, OUT ring, stale-queue flush), and MIDI Maze plays
 multiplayer over IP on real hardware (closing D-12). EPIC-10's 2-player hardware match
 is validated by playable gameplay. EPIC-11 returned the orchestrator to a dumb relay
-with real observability — a live SVG ring view polling per-node telemetry, reverse-DNS
+with real observability: a live SVG ring view polling per-node telemetry, reverse-DNS
 names, reconnection node recycling, and an end-user README usage guide. **Iteration
 complete.**

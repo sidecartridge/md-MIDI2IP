@@ -1,7 +1,7 @@
 ---
 id: STORY-04
 epic: EPIC-08
-title: Validate — Hatari MIDI Maze + smart orchestrator (single node)
+title: Validate: Hatari MIDI Maze + smart orchestrator (single node)
 status: done
 milestone: alpha-mvp
 ---
@@ -24,7 +24,7 @@ independently of the RP-hardware throughput ceiling (D-12).
 ## Acceptance
 
 A single Hatari MIDI Maze instance + the orchestrator with `--coordinate` brings up
-cleanly — the node becomes MASTER, and the orchestrator's inferred state (master /
+cleanly: the node becomes MASTER, and the orchestrator's inferred state (master /
 phase) matches what `--inspect` shows.
 
 ## Notes

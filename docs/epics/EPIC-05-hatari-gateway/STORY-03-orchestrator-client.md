@@ -8,8 +8,8 @@ milestone: alpha-mvp
 
 ## Goal
 
-Make the gateway a well-behaved orchestrator client — connect to a configured
-`host:port`, survive drops, and report what it's doing — mirroring the RP's
+Make the gateway a well-behaved orchestrator client: connect to a configured
+`host:port`, survive drops, and report what it's doing. Mirrors the RP's
 `midi_net_*` behaviour (EPIC-03 STORY-01/04).
 
 ## Tasks
@@ -29,4 +29,4 @@ logging.
 
 This is the EPIC-03 STORY-01/04 logic re-expressed in Python: same state machine
 (down/connecting/up), backoff, and clean-on-reconnect. Keep it stdlib (`socket` /
-`asyncio`). No HTTP status here — that's the orchestrator's job (EPIC-04 STORY-03).
+`asyncio`). No HTTP status here; that is the orchestrator's job (EPIC-04 STORY-03).

@@ -10,9 +10,9 @@ status: done
 Intercept the Atari ST OS calls MIDI Maze uses for MIDI I/O and wire a
 **local loopback** so a single ST plays MIDI Maze solo (a "ring of one") with
 **no MIDI cable, no second ST, no RP transport, and no network**. This proves
-the whole m68k path — hook → capture output → inject input — end to end, and is
+the whole m68k path (hook → capture output → inject input) end to end. It is
 a self-contained, demonstrable milestone. Later epics move the loopback outward:
-EPIC-02 routes it through the RP via shared-region rings, EPIC-03 over the
+EPIC-02 routes it through the RP via shared-region rings; EPIC-03 routes it over the
 network to the orchestrator.
 
 ## Scope
@@ -34,10 +34,10 @@ network to the orchestrator.
 
 ## Stories
 
-- STORY-01 — Install and chain the BIOS (trap #13) device-3 vector safely (XBRA)
-- STORY-02 — Capture MIDI output (BIOS Bconout, device 3)
-- STORY-03 — Deliver MIDI input to Bconin(3)/Bconstat(3)
-- STORY-04 — Local loopback: solo MIDI Maze (ring of one)
+- STORY-01: Install and chain the BIOS (trap #13) device-3 vector safely (XBRA)
+- STORY-02: Capture MIDI output (BIOS Bconout, device 3)
+- STORY-03: Deliver MIDI input to Bconin(3)/Bconstat(3)
+- STORY-04: Local loopback: solo MIDI Maze (ring of one)
 
 ## Notes
 
@@ -47,7 +47,7 @@ Confirmed on hardware: boots to GEM (non-MIDI undisturbed), and MIDI Maze become
 MASTER on a single machine.
 
 **Evolution note:** EPIC-01 originally also hooked XBIOS (`trap #14`) and injected
-received bytes into the system `Iorec(2)` buffer. That was later simplified — the
+received bytes into the system `Iorec(2)` buffer. That was later simplified. The
 BIOS hook now *is* the MIDI device, serving `Bconin`/`Bconstat` directly from the
 RP queue with **no XBIOS vector and no Iorec** (D-05). Some story bodies below
 still describe that original approach.

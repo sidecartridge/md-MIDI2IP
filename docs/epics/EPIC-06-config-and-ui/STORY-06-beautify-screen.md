@@ -7,7 +7,7 @@ status: done
 
 ## Goal
 
-Polish the setup/menu screen so it looks intentional and clean — consistent
+Polish the setup/menu screen so it looks intentional and clean: consistent
 spacing and alignment, a clear visual hierarchy (title → endpoint → options →
 status → bottom bar), no leftover template clutter.
 
@@ -21,7 +21,7 @@ status → bottom bar), no leftover template clutter.
 
 ## Acceptance
 
-The setup screen looks considered and readable on the ST — aligned, grouped, and
+The setup screen looks considered and readable on the ST: aligned, grouped, and
 free of raw-template clutter.
 
 ## Notes
