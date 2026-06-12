@@ -1,15 +1,20 @@
-# Orchestrator (EPIC-04)
+# Orchestrator
 
-The central server that connects MIDI Maze players into a ring by relaying raw
-bytes. **Python 3 standard library only** — no third-party packages, ever.
+The central server that connects MIDI Maze players into a ring by relaying raw bytes.
+Python 3 standard library only, no third-party packages.
 
 ```sh
 python3 orchestrator/orchestrator.py            # game on 0.0.0.0:5005, status on :8080
 python3 orchestrator/orchestrator.py --port 6000 --http-port 8081
 ```
 
-Status: open <http://localhost:8080/> (auto-refreshing HTML) or
-<http://localhost:8080/status.json> (machine-readable).
+Flags: `--host`, `--port`, `--http-port`, `--inspect` (decode and log the MIDI Maze
+protocol as it passes, read-only), `--no-http` (drop the status page so a status poll
+cannot add jitter to the lock-step ring).
+
+Status page: open <http://localhost:8080/> for the live SVG ring view, which polls
+`/status.json` every 2 seconds. <http://localhost:8080/status.json> serves the raw
+per-node telemetry.
 
 Self-test (spawns its own server on test ports, exit 0 = PASS):
 
@@ -17,19 +22,19 @@ Self-test (spawns its own server on test ports, exit 0 = PASS):
 python3 orchestrator/selftest.py
 ```
 
-Each connecting client (a ST+RP, or a Hatari gateway from EPIC-05) is a *player*.
-The RP firmware's `MIDI_NET_HOST`/`PORT` (EPIC-03) points here.
+Each connecting client (a ST+RP, or a Hatari gateway) is a *player*. The RP firmware
+points here via its configured orchestrator host and port.
 
-## Status
+## How it works
 
-- **STORY-01:** asyncio TCP server + connection registry (id, peer, connect time,
-  byte counters), `TCP_NODELAY`, connect/disconnect logging.
-- **STORY-02:** ring relay — each player's OUT bytes go to the next player's IN
-  (insertion order, wrapping); a ring of one echoes to self.
-- **STORY-03:** HTTP status on a separate port (HTML page + `/status.json`),
-  served in the same asyncio loop (race-free).
-- **STORY-04:** robustness — keepalive, slow-player drop, clean shutdown, and
-  **one connection per private IP** (a reconnect supersedes a node's stale
-  connection; public/NAT and loopback exempt).
-- **STORY-05:** validated end to end via `selftest.py` (ring relay, status,
-  drop/reconnect).
+The orchestrator is a dumb byte relay. Each player's MIDI OUT is forwarded verbatim to
+the next player's MIDI IN (insertion order, wrapping); a ring of one echoes to itself.
+The firmware owns the ring protocol, so the relay path stays opaque and does no parsing.
+`--inspect` adds an off-path decoder for debugging only.
+
+`status.json` reports, per node in ring order: `id`, `ip`, reverse-DNS `host`, `peer`,
+`connected_s`, `idle_s`, `bytes_out` (bytes received from the node), `bytes_in` (bytes
+sent to it). The server enforces one connection per private IP. A reconnect from the
+same IP supersedes the prior connection when that connection is a private-LAN node or
+has stalled, and the reconnection takes a fresh node id. TCP keepalive plus a slow-player
+drop keep one stuck node from freezing the ring.
