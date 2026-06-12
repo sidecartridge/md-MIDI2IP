@@ -15,11 +15,12 @@ IN**, and the last wraps back to the first. Game data (player positions, shots, 
 itself) circulates around this ring.
 
 ```
-Physical MIDI Maze ring — up to 16 machines, MIDI OUT -> MIDI IN:
+Physical MIDI Maze ring — up to 16 machines:
 
-   ┌────────────────────────── wraps back ──────────────────────────┐
-   │                                                                 │
-   └─> ST 1 ──> ST 2 ──> ST 3 ──>  ...  ──> ST 16 ───────────────────┘
+   ST 1 ─▶ ST 2 ─▶ ST 3 ─▶ ... ─▶ ST 16
+    ▲                              │
+    └──────────────────────────────┘
+   each machine's MIDI OUT feeds the next's MIDI IN; the last wraps back to ST 1
 ```
 
 **MIDI-to-IP recreates that ring over the network.** Instead of MIDI cables between
@@ -90,7 +91,9 @@ out any status-poll jitter on the lock-step ring).
 2. On boot, the MIDI-to-IP menu shows a countdown and the current Wi-Fi / local-IP /
    orchestrator status.
 3. Set the endpoint: press **`[H]ost`** for the orchestrator's IP or hostname, and
-   **`[P]ort`** for its port (default `5005`). The values are saved to the app config.
+   **`[P]ort`** for its port (default `5005`). The values are saved to the app config
+   and **persist across reboots** — you only need to do this the first time (or
+   whenever the orchestrator's address changes); otherwise just launch.
 4. Press **`[E]xit to GEM`** to launch the MIDI firmware now — or let the countdown
    finish, it auto-launches. (**`[X] Booster`** returns to the Booster.) The cartridge's
    BIOS device-3 hook is now the ST's MIDI device, bridged to the orchestrator.
