@@ -8,7 +8,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | Iteration | Theme | Status |
 | --- | --- | --- |
 | 1 | Architecture spike — build the full stack end to end | done |
-| 2 | Transport redesign, HW re-validation + orchestrator revamp | in progress (EPIC-11 STORY-06 README docs) |
+| 2 | Transport redesign, HW re-validation + orchestrator revamp | done |
 
 ---
 
@@ -71,5 +71,5 @@ bit-8 OUT, bit-9 IN + confirm-ack, OUT ring, stale-queue flush), and MIDI Maze p
 multiplayer over IP on real hardware (closing D-12). EPIC-10's 2-player hardware match
 is validated by playable gameplay. EPIC-11 returned the orchestrator to a dumb relay
 with real observability — a live SVG ring view polling per-node telemetry, reverse-DNS
-names, and reconnection node recycling. EPIC-11's core is done; the README end-user
-usage guide (STORY-06) is the remaining piece.
+names, reconnection node recycling, and an end-user README usage guide. **Iteration
+complete.**

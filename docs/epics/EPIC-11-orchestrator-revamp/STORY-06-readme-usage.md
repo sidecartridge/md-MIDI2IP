@@ -2,7 +2,7 @@
 id: STORY-06
 epic: EPIC-11
 title: Document end-user usage in README.md (Multi-device RP2040 + Hatari)
-status: todo
+status: done
 ---
 
 ## Goal
@@ -13,11 +13,11 @@ or the epics.
 
 ## Tasks
 
-- [ ] **SidecarTridge Multi-device (RP2040):** flash the UF2 to the Pico, seat the board in the cartridge slot, boot the Atari ST, set the orchestrator host/port in the boot menu, launch the firmware ([E]), then run MIDI Maze and pick "MIDI" networking
-- [ ] **Hatari node:** run the EPIC-05 gateway (Hatari MIDI ↔ FIFO ↔ orchestrator) so a software player joins the same ring — the documented Hatari invocation + the gateway command
-- [ ] **Orchestrator:** run `orchestrator/orchestrator.py` (host/port), open the HTTP ring page to watch nodes, and note `--inspect` for protocol logging and `--no-http` for lock-step runs
-- [ ] A minimal **2-node walkthrough** (one RP-hardware node + one Hatari node through one orchestrator) that reaches master election and plays
-- [ ] Keep it accurate to the current build/flags and stdlib-only (no extra deps); link to CLAUDE.md/build.sh for build/flash mechanics rather than duplicating them
+- [x] **SidecarTridge Multi-device (RP2040):** flash the UF2 to the Pico, seat the board in the cartridge slot, boot the Atari ST, set the orchestrator host/port in the boot menu, launch the firmware ([E]), then run MIDI Maze and pick "MIDI" networking
+- [x] **Hatari node:** run the EPIC-05 gateway (Hatari MIDI ↔ FIFO ↔ orchestrator) so a software player joins the same ring — the documented Hatari invocation + the gateway command
+- [x] **Orchestrator:** run `orchestrator/orchestrator.py` (host/port), open the HTTP ring page to watch nodes, and note `--inspect` for protocol logging and `--no-http` for lock-step runs
+- [x] A minimal **2-node walkthrough** (one RP-hardware node + one Hatari node through one orchestrator) that reaches master election and plays
+- [x] Keep it accurate to the current build/flags and stdlib-only (no extra deps); link to CLAUDE.md/build.sh for build/flash mechanics rather than duplicating them
 
 ## Acceptance
 

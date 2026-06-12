@@ -6,6 +6,73 @@ MIDI-to-IP is a microfirmware for the SidecarTridge Multidevice that redirects a
 
 General build and usage of SidecarTridge Multi-device microfirmware apps is documented in the official [SidecarTridge Multi-device documentation](https://docs.sidecartridge.com/sidecartridge-multidevice/programming/). To avoid inconsistencies and outdated information, we've centralized the shared instructions there. Please refer to the official documentation for the latest guidance.
 
+## Usage
+
+MIDI-to-IP joins Atari **MIDI Maze** players into one ring over IP. You run a small
+**orchestrator** (relays the ring) and one or more **nodes** — a real Atari ST with the
+SidecarTridge Multi-device (RP2040 Pico W), and/or the [Hatari](https://www.hatari-emu.org/)
+emulator via the gateway.
+
+> Flashing the UF2 and the general Multi-device boot/Wi-Fi setup are covered in the
+> [official documentation](https://docs.sidecartridge.com/sidecartridge-multidevice/programming/).
+> The steps below are the MIDI-to-IP-specific ones.
+
+### 1 · Start the orchestrator
+
+Python 3 standard library only (no dependencies):
+
+```sh
+python3 orchestrator/orchestrator.py            # binds 0.0.0.0:5005, HTTP status on :8080
+# options: --host H --port P --http-port P --inspect --no-http
+```
+
+Open `http://<orchestrator-ip>:8080/` for the live **ring view** — each connected node
+drawn around the ring with its host/IP and bytes in/out, refreshing every 2 s. `--inspect`
+logs the decoded MIDI Maze protocol as it passes; `--no-http` drops the status page (rules
+out any status-poll jitter on the lock-step ring).
+
+### 2 · A real Atari ST node (SidecarTridge Multi-device / RP2040)
+
+1. Flash the MIDI-to-IP UF2 (`dist/<uuid>-<version>.uf2`) to the **Pico W** and seat the
+   board in the Multi-device cartridge slot. Make sure Wi-Fi is configured (via the
+   Booster / global config — see the official docs).
+2. Power on the ST. The MIDI-to-IP boot menu appears with a countdown and the current
+   Wi-Fi / local-IP / orchestrator status.
+3. Set the endpoint: press **`[H]ost`** to enter the orchestrator's IP or hostname, and
+   **`[P]ort`** to enter its port (default `5005`). The values are saved to the app config.
+4. Press **`[E]xit to GEM`** to launch the MIDI firmware now — or let the countdown finish,
+   it auto-launches. (**`[X] Booster`** jumps to the Booster instead.) The cartridge's BIOS
+   device-3 hook is now the ST's MIDI device, bridged to the orchestrator.
+5. From GEM, run **MIDI Maze**. It uses the ST's MIDI ports as usual; the firmware
+   transparently carries that MIDI to/from the orchestrator over Wi-Fi.
+
+### 3 · A Hatari node (software peer)
+
+Bridge Hatari's file-based MIDI to the orchestrator with the gateway:
+
+```sh
+python3 hatari-gateway/gateway.py --host <orchestrator-ip> --port 5005
+# default --dir /tmp/hatari-midi, orchestrator 127.0.0.1:5005
+```
+
+The gateway prints the exact Hatari command; run Hatari with the two MIDI FIFOs:
+
+```sh
+hatari --midi-out /tmp/hatari-midi/midi_out.fifo \
+       --midi-in  /tmp/hatari-midi/midi_in.fifo  <midimaze program or disk>
+```
+
+Start the orchestrator first; the gateway and Hatari can start in either order.
+
+### 4 · Play a 2-node match
+
+1. Start the orchestrator.
+2. Bring up node A (a real ST, or Hatari + gateway) pointed at the orchestrator's IP.
+3. Bring up node B the same way.
+4. Watch `http://<orchestrator-ip>:8080/` — both nodes appear on the ring.
+5. In MIDI Maze, run master election / count players and start a game — the two nodes
+   play over IP.
+
 ## Shared 64 KB region layout
 
 A single source-of-truth layout governs the 64 KB shared region (m68k `$FA0000`–`$FAFFFF`, mirrored at RP `0x20030000`):
