@@ -1,31 +1,35 @@
 ---
 id: STORY-02
 epic: EPIC-11
-title: Stale relay-buffer cleanup — drop pending IN/OUT after 10 s
-status: todo
+title: Reconnection node recycling — supersede a stalled prior same-IP connection
+status: done
 ---
 
 ## Goal
 
-Mirror the firmware's stale-queue policy (EPIC-09 STORY-04) on the orchestrator: if a
-node's relay buffers (bytes queued to or from it) sit undrained past a timeout, drop
-them so a stalled or slow node can't replay stale traffic into a resumed ring.
+When a node reconnects from an IP that already has a connection, recycle its node
+number: if the prior connection is stalled (a dead/half-open node that never FIN'd),
+drop it and give the reconnection a fresh, incremented node id — so a reset node
+rejoins cleanly instead of leaving a phantom.
 
 ## Tasks
 
-- [ ] Track a last-progress timestamp per node for the inbound and outbound relay buffers
-- [ ] Drop buffered bytes (and log it) when a buffer has made no progress for `STALE_SECONDS` (10 s, a module constant)
-- [ ] Compose cleanly with the existing slow-player drop / bounded write buffers — flush stale data without double-dropping or killing a healthy-but-busy node
-- [ ] Expose a per-node stale-flush count for the telemetry feed (STORY-04)
+- [x] Track per-node liveness (`last_active` = event-loop time of the last byte received), stamped on connect and every relayed chunk
+- [x] `_is_stalled(player, now)` = no OUT bytes for `RECONNECT_STALE_S` (10 s, a module constant)
+- [x] On a new connection from an IP that already has a node: drop the prior same-IP connection when it's a private LAN address (one-per-IP) **or** stalled (any IP class, incl. loopback / NAT); the reconnection always gets a fresh incremented id
+- [x] Confirm `selftest.py` passes (fresh node not stalled; quiet node stalled past threshold)
 
 ## Acceptance
 
-A node that stalls ≥10 s has its pending IN/OUT bytes flushed (and logged), and a
-resumed node rejoins with a clean buffer instead of replaying old data. Healthy nodes
-under load are unaffected.
+A node that reconnects from the same IP supersedes its stalled prior connection and is
+assigned a new incremented node number; a still-active connection from an exempt IP
+(loopback/NAT) is left alone. Selftest green. **Met.**
 
 ## Notes
 
-10 s is conservative vs. the firmware's 1 s (`MIDI_QUEUE_STALE_MS`) — the orchestrator
-sees whole sessions, not the lock-step ring, so it should only catch genuine stalls.
-Tunable constant.
+Replaces the original "stale relay-buffer cleanup" scope: the relay forwards each
+chunk immediately (no per-node byte queue to age out), so the meaningful staleness is
+at the **connection** level. This extends the existing one-per-private-IP dedup
+(EPIC-04 STORY-04) — which always supersedes a private-IP node — to also drop a
+*stalled* prior connection for IP classes that are exempt from the strict dedup, so a
+reconnecting loopback/NAT node doesn't leave a phantom. `RECONNECT_STALE_S` is tunable.

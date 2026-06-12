@@ -137,6 +137,11 @@ def _should_dedup_ip(ip: str) -> bool:
 # as stuck and dropped, so one slow node can't freeze the lock-step ring.
 SLOW_PLAYER_TIMEOUT_S = 5.0
 WRITE_BUFFER_HIGH = 64 * 1024  # bound per-connection write buffer (bytes)
+# A prior connection from a reconnecting IP that has relayed nothing for this long
+# is treated as a stalled/dead node (it never FIN'd) and superseded by the
+# reconnection — even for IP classes exempt from the strict one-per-IP dedup
+# (loopback/NAT). The reconnection always gets a fresh, incremented node id.
+RECONNECT_STALE_S = 10.0
 
 
 def _enable_keepalive(sock: socket.socket) -> None:
@@ -165,6 +170,7 @@ class Player:
     connected_at: float  # event-loop clock (seconds); for uptime
     bytes_out: int = 0  # bytes received FROM the player (their MIDI OUT)
     bytes_in: int = 0  # bytes sent TO the player (their MIDI IN)
+    last_active: float = 0.0  # event-loop time of the last byte received (liveness)
     inspector: "MidiMazeInspector | None" = None  # per-player --inspect decoder
 
 
@@ -217,6 +223,12 @@ def _drop_player(player: Player, reason: str) -> None:
         pass
 
 
+def _is_stalled(player: Player, now: float) -> bool:
+    """A connected player that has relayed no OUT bytes for RECONNECT_STALE_S — a
+    likely dead/half-open node. Used to supersede it when its IP reconnects."""
+    return (now - player.last_active) > RECONNECT_STALE_S
+
+
 async def handle_player(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
@@ -239,21 +251,28 @@ async def handle_player(
     peer = f"{peername[0]}:{peername[1]}" if peername else "?"
     ip = peername[0] if peername else "?"
 
-    # One connection per private IP (a LAN node = one IP). A reconnecting node
-    # whose old, half-open connection hasn't been detected yet would otherwise
-    # show up as a phantom extra player — so supersede any existing connection
-    # from this IP. Public IPs (NAT gateways) and loopback are exempt.
-    if _should_dedup_ip(ip):
-        for existing in registry.players():
-            if existing.ip == ip:
-                _drop_player(existing, f"superseded by new connection from {ip}")
+    # Supersede a prior connection from this IP on (re)connect (EPIC-11 STORY-02).
+    # A private LAN address is always one-per-IP (a LAN node = one IP). For ANY IP
+    # class (incl. loopback / NAT, which are exempt from the strict dedup), a
+    # *stalled* prior connection is a dead node that never FIN'd — drop it so the
+    # reconnection doesn't leave a phantom. The reconnection always gets a fresh,
+    # incremented node id.
+    now = asyncio.get_event_loop().time()
+    for existing in registry.players():
+        if existing.ip != ip:
+            continue
+        if _should_dedup_ip(ip):
+            _drop_player(existing, f"superseded (LAN one-per-IP) by reconnection from {ip}")
+        elif _is_stalled(existing, now):
+            _drop_player(existing, f"superseded (prior connection stalled) by reconnection from {ip}")
 
     player = Player(
         id=next(_next_id),
         peer=peer,
         ip=ip,
         writer=writer,
-        connected_at=asyncio.get_event_loop().time(),
+        connected_at=now,
+        last_active=now,
     )
     registry.add(player)
     if _inspect:
@@ -266,6 +285,7 @@ async def handle_player(
             if not data:
                 break  # clean EOF (peer closed)
             player.bytes_out += len(data)
+            player.last_active = asyncio.get_event_loop().time()
             # Forward this player's OUT bytes to the next player's IN, verbatim
             # (D-02) — a dumb relay; the firmware owns the ring (EPIC-09). Single
             # source per target, so no interleaving.

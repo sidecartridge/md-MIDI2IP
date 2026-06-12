@@ -12,7 +12,7 @@ SEND-DATA all run over the commemul fast path), the orchestrator no longer needs
 model the protocol to do its job: it just relays bytes. Simplify it back to a **dumb
 relay** (keeping the `--inspect` decoder for debugging) and give it real
 **observability** — a live in-browser ring visualization showing each node's host/IP
-and byte counters, plus reverse-DNS naming and stale-buffer hygiene.
+and byte counters, plus reverse-DNS naming and clean node recycling on reconnect.
 
 ## Background
 
@@ -32,7 +32,8 @@ proper telemetry feed + a real visualization instead of a static HTML dump.
 - **In:** retire `RingState` (the stateful ring model) → pure byte relay; keep
   `--inspect`; per-node telemetry in `status.json` (IP, reverse-DNS host, bytes
   in/out, ring order); a revamped self-contained HTML page that draws the ring and
-  polls `status.json` every 2 s; stale IN/OUT relay-buffer cleanup (drop after 10 s).
+  polls `status.json` every 2 s; reconnection node recycling (supersede a stalled
+  prior same-IP connection, recycling the node id).
 - **Out:** the firmware/RP side (EPIC-09, done); the wire transport; MIDI-protocol
   awareness beyond `--inspect` (D-02 — the relay stays opaque); auth and multi-ring
   (the single global ring stays).
@@ -40,7 +41,7 @@ proper telemetry feed + a real visualization instead of a static HTML dump.
 ## Stories
 
 - **STORY-01** Retire the protocol-state model → dumb relay (keep `--inspect`)
-- **STORY-02** Stale relay-buffer cleanup (drop pending IN/OUT after 10 s)
+- **STORY-02** Reconnection node recycling (supersede a stalled prior same-IP connection)
 - **STORY-03** Reverse-DNS the connected node hostnames
 - **STORY-04** Per-node telemetry in `status.json` (IP, host, bytes in/out)
 - **STORY-05** Revamped ring-visualization HTML page (polls `status.json` every 2 s)
@@ -58,5 +59,5 @@ proper telemetry feed + a real visualization instead of a static HTML dump.
 
 Enabled by EPIC-09 (the firmware now owns the ring). Touches only
 `orchestrator/orchestrator.py` and its served HTML/JSON. Reference: EPIC-04 (the
-relay this returns to), EPIC-08 (the `RingState` coordination being retired), EPIC-09
-STORY-04 (the firmware-side stale-queue policy this mirrors on the server).
+relay this returns to), EPIC-08 (the `RingState` coordination being retired), EPIC-04
+STORY-04 (the one-connection-per-IP dedup that STORY-02 extends).

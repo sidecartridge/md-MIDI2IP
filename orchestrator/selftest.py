@@ -143,6 +143,14 @@ def main() -> int:
     check("loopback -> no dedup (local testing)", orch._should_dedup_ip("127.0.0.1") is False)
     check("invalid -> no dedup", orch._should_dedup_ip("not-an-ip") is False)
 
+    # Reconnection supersede (EPIC-11 STORY-02): a prior same-IP connection that
+    # has gone quiet past RECONNECT_STALE_S is stalled, so a reconnection drops it
+    # and the new connection takes a fresh, incremented node id.
+    p = orch.Player(id=9, peer="x:1", ip="x", writer=None, connected_at=0.0, last_active=100.0)
+    check("fresh node not stalled", orch._is_stalled(p, 105.0) is False)
+    check("quiet node stalled past threshold",
+          orch._is_stalled(p, 100.0 + orch.RECONNECT_STALE_S + 1) is True)
+
     # Phase C — the --inspect protocol decoder (the only protocol awareness left
     # after EPIC-11 STORY-01 returned the relay to dumb). Read-only, off the relay
     # path — it decodes a player's OUT stream into event labels for the log.
