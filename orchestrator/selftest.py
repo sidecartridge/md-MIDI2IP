@@ -122,6 +122,10 @@ def main() -> int:
               all("ip" in p and "idle_s" in p for p in st["players"]))
         check("players listed in ring order",
               st["ring"] == [p["id"] for p in st["players"]])
+        with urllib.request.urlopen(f"http://{HOST}:8099/", timeout=2) as r:
+            page = r.read().decode("utf-8")
+        check("HTML page is the ring viz (svg + polls status.json)",
+              "<svg" in page and "status.json" in page)
 
         print("drop + reconnect:")
         a.close()

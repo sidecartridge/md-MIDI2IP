@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import html
 import ipaddress
 import json
 import logging
@@ -402,47 +401,71 @@ def _status_json() -> bytes:
     return json.dumps(_status_snapshot(), indent=2).encode("utf-8")
 
 
+# Self-contained ring-visualization page (STORY-05): no external/CDN deps. It
+# polls /status.json every 2 s and (re)draws the ring in SVG — nodes around a
+# circle in relay order with arrowheads for the forward direction, each labelled
+# with host/IP and bytes out/in; a node idle past STALE seconds is dimmed; an
+# unreachable status.json degrades to a banner. Served verbatim (the JS holds the
+# live data), so the page itself never needs server-side templating.
+_STATUS_PAGE = (
+    "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>MIDI-to-IP orchestrator</title><style>"
+    "body{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
+    "background:#0e1116;color:#d8dee9}"
+    "header{padding:.7em 1.1em;border-bottom:1px solid #21262d}"
+    "h1{font-size:1.05em;margin:0}"
+    "#meta{color:#8b949e;font-size:.85em;margin-top:.3em}"
+    "svg{display:block;width:100%;height:82vh}"
+    ".node circle{fill:#161b22;stroke:#4f9cff;stroke-width:2}"
+    ".node.stalled circle{stroke:#5a6068}"
+    ".node text{fill:#d8dee9;font-size:13px;text-anchor:middle}"
+    ".node .sub{fill:#8b949e;font-size:11px}"
+    ".node.stalled text{fill:#6b7280}"
+    ".edge{stroke:#3a4250;stroke-width:1.5;fill:none;marker-end:url(#a)}"
+    ".empty{fill:#8b949e;font-size:15px;text-anchor:middle}"
+    "</style></head><body>"
+    "<header><h1>MIDI-to-IP orchestrator</h1>"
+    "<div id='meta'>connecting...</div></header>"
+    "<svg viewBox='0 0 800 600' preserveAspectRatio='xMidYMid meet'>"
+    "<defs><marker id='a' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' "
+    "markerHeight='7' orient='auto-start-reverse'>"
+    "<path d='M0 0L10 5L0 10z' fill='#3a4250'/></marker></defs>"
+    "<g id='edges'></g><g id='nodes'></g></svg>"
+    "<script>"
+    "const NS='http://www.w3.org/2000/svg',STALE=10,CX=400,CY=300,R=205;"
+    "function el(t,a,p){const e=document.createElementNS(NS,t);"
+    "for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e}"
+    "function pos(i,n){if(n===1)return[CX,CY];"
+    "const g=(i/n)*2*Math.PI-Math.PI/2;return[CX+R*Math.cos(g),CY+R*Math.sin(g)]}"
+    "async function tick(){let s;"
+    "try{s=await(await fetch('status.json',{cache:'no-store'})).json()}"
+    "catch(e){document.getElementById('meta').textContent="
+    "'orchestrator unreachable (retrying)';return}"
+    "document.getElementById('meta').textContent='uptime '+s.uptime_s+'s | game '"
+    "+s.listen+' | '+s.players_online+' online';"
+    "const E=document.getElementById('edges'),N=document.getElementById('nodes');"
+    "E.textContent='';N.textContent='';"
+    "const ps=s.players||[],n=ps.length;"
+    "if(!n){el('text',{x:CX,y:CY,class:'empty'},N).textContent="
+    "'(no nodes connected)';return}"
+    "const P=ps.map((p,i)=>pos(i,n));"
+    "if(n>1)for(let i=0;i<n;i++){const A=P[i],B=P[(i+1)%n];"
+    "el('line',{class:'edge',x1:A[0],y1:A[1],x2:B[0],y2:B[1]},E)}"
+    "ps.forEach((p,i)=>{const X=P[i][0],Y=P[i][1];"
+    "const gg=el('g',{class:'node'+(p.idle_s>STALE?' stalled':'')},N);"
+    "el('circle',{cx:X,cy:Y,r:36},gg);"
+    "el('text',{x:X,y:Y-6},gg).textContent='#'+p.id;"
+    "el('text',{x:X,y:Y+11,class:'sub'},gg).textContent=p.host||p.ip;"
+    "el('text',{x:X,y:Y+54,class:'sub'},gg).textContent="
+    "'out '+p.bytes_out+'  in '+p.bytes_in})}"
+    "tick();setInterval(tick,2000);"
+    "</script></body></html>"
+).encode("utf-8")
+
+
 def _status_html() -> bytes:
-    s = _status_snapshot()
-    ring = s["ring"]
-    if not ring:
-        ring_str = "(empty)"
-    elif len(ring) == 1:
-        ring_str = f"{ring[0]} → {ring[0]} (self)"
-    else:
-        ring_str = " → ".join(str(i) for i in ring) + f" → {ring[0]}"
-    rows = "".join(
-        "<tr><td>{id}</td><td>{peer}</td><td>{connected_s}s</td>"
-        "<td>{bytes_out}</td><td>{bytes_in}</td></tr>".format(
-            id=p["id"],
-            peer=html.escape(p["peer"]),
-            connected_s=p["connected_s"],
-            bytes_out=p["bytes_out"],
-            bytes_in=p["bytes_in"],
-        )
-        for p in s["players"]
-    )
-    page = (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<title>MIDI-to-IP orchestrator</title>"
-        "<meta http-equiv='refresh' content='2'>"
-        "<style>body{{font-family:monospace;margin:2em}}"
-        "table{{border-collapse:collapse}}td,th{{border:1px solid #999;padding:.3em .7em;text-align:left}}"
-        "</style></head><body>"
-        "<h1>MIDI-to-IP orchestrator</h1>"
-        "<p>uptime {uptime_s}s &middot; game {listen} &middot; players online {players_online}</p>"
-        "<p>ring: {ring}</p>"
-        "<table><tr><th>id</th><th>peer</th><th>connected</th>"
-        "<th>bytes out</th><th>bytes in</th></tr>{rows}</table>"
-        "</body></html>"
-    ).format(
-        uptime_s=s["uptime_s"],
-        listen=html.escape(s["listen"]),
-        players_online=s["players_online"],
-        ring=ring_str,
-        rows=rows or "<tr><td colspan='5'>(no players)</td></tr>",
-    )
-    return page.encode("utf-8")
+    return _STATUS_PAGE
 
 
 async def handle_http(
