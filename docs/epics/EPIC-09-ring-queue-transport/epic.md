@@ -2,8 +2,17 @@
 id: EPIC-09
 iteration: 2
 title: Stream MIDI over the commemul ROM3 ring (drop the per-byte command handshake)
-status: todo
+status: in-progress
 ---
+
+## Progress
+
+**The transport works: MIDI Maze is playable multiplayer over IP on real hardware.**
+STORY-01 (OUT), STORY-02 (IN), STORY-04 (overrun/flow-control), STORY-05 (validation)
+are **done**; STORY-03 (retire the dead `CMD_MIDI_SEND`/`CMD_MIDI_RECV` path) is the
+remaining cleanup. Landed in `bfe4429` (transport) + `5567c65` (stale-queue cleanup).
+The two corrections that mattered vs. the original design are folded in below
+(Decision A, Open questions).
 
 ## Goal
 
@@ -74,12 +83,15 @@ region (as `Bconstat` already reads a depth today).
 - The RP consumer, on the bit-9 sample, does `read_idx++` and republishes the new
   head byte + depth.
 
-**Decision (A): pure fire-and-forget.** The RP poll loop (225 MHz) is far faster
-than the Atari's per-byte `Bconin` loop (8 MHz, several instructions per byte), so
-the RP always advances and republishes the head before the ST can re-read — no
-duplicate, no confirm-wait, no m68k cursor. The bit-9 signal doubles as the RP's
-flow-control feedback (it tracks the consumed count); ring overrun when the
-producer outruns the consumer is the only remaining concern.
+**Decision (A): pure fire-and-forget — REVISED on hardware.** The premise ("the
+225 MHz RP always advances before the ST can re-read") was **false**: the advance is
+processed asynchronously by `chandler_loop`, so `MIDI_IN_STATUS` stayed stale (-1)
+between the m68k firing the advance and the RP popping. MIDI Maze's tight `Bconin`
+loop re-read the same byte ~13× (`IN_adv >> RX`) → corrupted ring. **Resolved with a
+confirm-ack** (the documented fallback): the RP bumps `MIDI_IN_ACK` after each
+pop+republish and `.mbt_in` blocks on it before returning, so `Bconin` can't return
+until the byte is truly consumed. A few µs/byte; no m68k cursor needed. The bit-9
+signal still feeds the RP's consumed count for flow control.
 
 ## Scope
 
@@ -106,20 +118,24 @@ producer outruns the consumer is the only remaining concern.
 
 ## Open questions / risks
 
-- IN-ring overrun when the RP (network producer) outruns the ST's `Bconin` drain —
-  ring size + drop/stall policy (the bit-9 advances give the RP the consumed count
-  for backpressure).
-- Confirming on hardware that the RP poll always wins the advance race (decision A);
-  instrument for duplicate IN bytes, keep a 1-word m68k cursor as the documented
-  fallback if it ever loses.
-- Atomicity/visibility of the published head byte + depth (RP writer vs ST reader).
+- ~~RP always wins the advance race (decision A)~~ — **it did not**; fixed with the
+  `MIDI_IN_ACK` confirm handshake (see Decision A above).
+- ~~Atomicity/visibility of the published head byte + status~~ — handled: byte written
+  before status; byte replicated 4× so it's endian-/swap-invariant.
+- **Overrun, resolved in practice:** the pressing loss was OUT-side (`Bconout` burst
+  overran per-byte `tcp_write`, `OUT > RX`), fixed with an OUT ring drained in the
+  poll context. IN drop-on-full + a time-based stale flush cover the IN side.
+- **Still open:** true network backpressure (stop reading the socket on a full IN
+  ring) is not implemented — current policy is drop + stale-flush. Old `CMD_MIDI_*`
+  command path is still present (STORY-03 cleanup).
 
 ## Stories
 
-_To be defined._ Rough shape: (1) OUT commemul byte-stream end-to-end;
-(2) IN shared-memory ring end-to-end; (3) retire the old `CMD_MIDI_*` path;
-(4) flow-control / overrun; (5) on-hardware throughput + 2-node game validation
-(overlaps EPIC-10).
+- **STORY-01** OUT byte-stream (bit 8) — **done**
+- **STORY-02** IN ring + bit-9 advance, with confirm-ack — **done**
+- **STORY-03** retire the per-byte `CMD_MIDI_*` path — **todo** (remaining cleanup)
+- **STORY-04** IN/OUT overrun, flow-control & stale-queue policy — **done**
+- **STORY-05** on-hardware throughput + 2-node game validation — **done** (playable)
 
 ## Notes
 
