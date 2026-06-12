@@ -57,6 +57,17 @@ static uint16_t midiOutHead = 0;  // producer (bus loop / hot path)
 static uint16_t midiOutTail = 0;  // consumer (net poll)
 static uint32_t midiOutDrop = 0;  // DEBUG: ring-full drops (should stay 0)
 
+// --- Time-based staleness cleanup ---
+// If pending bytes aren't drained within this window — IN: consumed by the m68k
+// (Bconin), OUT: accepted by TCP — the consumer/link has stalled and the pending
+// bytes are stale. Flushing them lets a resumed peer resync instead of replaying
+// old traffic, which is what produces mid-game glitches. Each *LastDrain stamps
+// the last healthy moment (a drain, or an empty->non-empty fill that restarts the
+// window); the cleanup flushes a non-empty queue that has had none for STALE_MS.
+#define MIDI_QUEUE_STALE_MS 1000
+static absolute_time_t midiInLastDrain;
+static absolute_time_t midiOutLastDrain;
+
 // DEBUG: command counters — printed once/sec as a rate (commands/s = inverse of
 // per-byte latency) to measure CMD_MIDI_SEND / CMD_MIDI_RECV throughput.
 static uint32_t midiCmdSend = 0;
@@ -73,19 +84,12 @@ static bool midiEnabled = true;
 static inline bool __not_in_flash_func(midi_in_push)(uint8_t b) {
   uint16_t next = (uint16_t)((midiInHead + 1) & (MIDI_IN_QUEUE_SIZE - 1));
   if (next == midiInTail) return false;  // full: drop
+  bool wasEmpty = (midiInHead == midiInTail);
   midiInQueue[midiInHead] = b;
   midiInHead = next;
+  // A byte landing in an empty queue restarts the staleness window.
+  if (wasEmpty) midiInLastDrain = get_absolute_time();
   return true;
-}
-
-// Publish the IN-queue Bconstat status to the shared region so the m68k can
-// read it without a command (the hook IS the MIDI device — EPIC-08). NOTE:
-// unused — midi_in_publish() is the live publisher.
-static inline void __not_in_flash_func(midi_publish_depth)(void) {
-  uint16_t depth =
-      (uint16_t)((midiInHead - midiInTail) & (MIDI_IN_QUEUE_SIZE - 1));
-  WRITE_AND_SWAP_LONGWORD((unsigned int)&__rom_in_ram_start__,
-                          MIDI_IN_STATUS_OFFSET, depth ? 0xFFFFFFFFu : 0u);
 }
 
 // EPIC-09 STORY-02 IN ring: publish the head byte (the next byte Bconin
@@ -169,13 +173,8 @@ static err_t midi_net_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
   for (struct pbuf *q = p; q != NULL; q = q->next) {
     const uint8_t *bytes = (const uint8_t *)q->payload;
     for (uint16_t i = 0; i < q->len; i++) {
-      bool placed = midi_in_push(bytes[i]);
+      midi_in_push(bytes[i]);
       midiNetRx++;  // DEBUG: orchestrator echo arrived at the RP
-      uint16_t depth =
-          (uint16_t)((midiInHead - midiInTail) & (MIDI_IN_QUEUE_SIZE - 1));
-      // DEBUG: byte received from the net + whether it was placed to be read.
-      // DPRINTF("MIDI rx %02X -> %s qdepth=%u\n", bytes[i],
-      //         placed ? "placed" : "DROP", depth);
     }
   }
   midi_in_publish();  // publish the new head byte + depth for Bconin/Bconstat
@@ -240,8 +239,10 @@ static void __not_in_flash_func(midi_net_send_byte)(uint8_t b) {
     midiOutDrop++;
     return;
   }
+  bool wasEmpty = (midiOutHead == midiOutTail);
   midiOutQueue[midiOutHead] = b;
   midiOutHead = next;
+  if (wasEmpty) midiOutLastDrain = get_absolute_time();
 }
 
 // Drain queued OUT bytes to the orchestrator. Poll context only. Writes in
@@ -267,7 +268,34 @@ static void midi_net_flush_out(void) {
     midiOutTail = (uint16_t)((midiOutTail + n) & (MIDI_OUT_QUEUE_SIZE - 1));
     wrote = true;
   }
-  if (wrote) tcp_output(midiNetPcb);
+  if (wrote) {
+    tcp_output(midiNetPcb);
+    midiOutLastDrain = get_absolute_time();  // TCP is accepting — healthy
+  }
+}
+
+// Drop pending bytes whose consumer/link has stalled past MIDI_QUEUE_STALE_MS —
+// they're stale and replaying them desyncs the ring. Poll context only.
+static void midi_queue_cleanup(void) {
+  absolute_time_t now = get_absolute_time();
+  if (midiInHead != midiInTail &&
+      absolute_time_diff_us(midiInLastDrain, now) > MIDI_QUEUE_STALE_MS * 1000) {
+    uint16_t dropped =
+        (uint16_t)((midiInHead - midiInTail) & (MIDI_IN_QUEUE_SIZE - 1));
+    midiInTail = midiInHead;
+    midi_in_publish();  // Bconstat now reports "no byte"
+    midiInLastDrain = now;
+    DPRINTF("MIDI IN stale: flushed %u byte(s)\n", dropped);
+  }
+  if (midiOutHead != midiOutTail &&
+      absolute_time_diff_us(midiOutLastDrain, now) >
+          MIDI_QUEUE_STALE_MS * 1000) {
+    uint16_t dropped =
+        (uint16_t)((midiOutHead - midiOutTail) & (MIDI_OUT_QUEUE_SIZE - 1));
+    midiOutTail = midiOutHead;
+    midiOutLastDrain = now;
+    DPRINTF("MIDI OUT stale: flushed %u byte(s)\n", dropped);
+  }
 }
 
 // STORY-04: the on-board green LED mirrors the orchestrator link — steady on
@@ -292,8 +320,9 @@ static void midi_net_update_led(void) {
 // the backoff resets on a successful connect.
 void midi_net_poll(void) {
   midi_net_update_led();
-  midi_net_flush_out();  // drain queued OUT bytes to the orchestrator
-  // DEBUG: once/sec, print the command rate (= bytes/sec each way).
+  midi_net_flush_out();   // drain queued OUT bytes to the orchestrator
+  midi_queue_cleanup();   // drop stale pending bytes if a side has stalled
+#if 0  // per-second MIDI/s rate trace — re-enable to instrument throughput
   static absolute_time_t cmdStatAt = {0};
   static uint32_t lastSend = 0, lastRecv = 0, lastRx = 0, lastSamples = 0;
   if (absolute_time_diff_us(get_absolute_time(), cmdStatAt) <= 0) {
@@ -312,6 +341,7 @@ void midi_net_poll(void) {
     lastSamples = samples;
     cmdStatAt = make_timeout_time_ms(1000);
   }
+#endif
   if (!midiEnabled) {
     return;  // STORY-01: orchestrator connection disabled in config
   }
@@ -389,6 +419,7 @@ static bool __not_in_flash_func(midi_rom3_consumer)(uint16_t addr_lsb) {
     if (midiInTail != midiInHead) {
       midiInTail = (uint16_t)((midiInTail + 1) & (MIDI_IN_QUEUE_SIZE - 1));
     }
+    midiInLastDrain = get_absolute_time();  // the m68k is consuming — healthy
     midi_in_publish();  // republish the new head byte + status
     // Ack the advance: the m68k's Bconin blocks on this until we've popped +
     // republished, so a stale MIDI_IN_STATUS can't be re-read (IN_adv >> RX).
@@ -484,6 +515,8 @@ void midi_init(void) {
                           MIDI_IN_STATUS_OFFSET, 0);
   WRITE_AND_SWAP_LONGWORD((unsigned int)&__rom_in_ram_start__,
                           MIDI_IN_ACK_OFFSET, 0);
+  midiInLastDrain = get_absolute_time();
+  midiOutLastDrain = get_absolute_time();
   chandler_addCB(midi_command_cb);
   chandler_setRawConsumer(midi_rom3_consumer);  // EPIC-09 fast-path OUT stream
 }
