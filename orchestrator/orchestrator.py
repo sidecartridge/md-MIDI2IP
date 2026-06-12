@@ -120,114 +120,6 @@ class MidiMazeInspector:
         return [f"JOYSTICK({_mm_joystick(b)})"] if self._in_game else [f"byte(0x{b:02x})"]
 
 
-class RingState:
-    """EPIC-08 STORY-01 — read-only ring-level view of the MIDI Maze protocol
-    (one global ring, D-04), inferred from the bytes the orchestrator relays.
-
-    Powers the HTTP status and is the foundation the STORY-02 election
-    coordinator will act on. **Observation only** — it never alters relayed
-    bytes (D-02). Master detection is a heuristic here (the first node to
-    originate a post-election control message); STORY-02 makes it authoritative.
-
-    Phases: idle / electing / counting / name-dialog / in-game / terminated."""
-
-    def __init__(self) -> None:
-        self._decoders: "dict[int, MidiMazeInspector]" = {}
-        self.phase = "idle"
-        self.master_id: "int | None" = None
-        self.last_count: "int | None" = None
-
-    def add_player(self, pid: int) -> None:
-        self._decoders[pid] = MidiMazeInspector()
-        if self.phase == "idle":
-            self.phase = "electing"
-        # Keep any sitting master: a join makes the newcomer a SLAVE (its election
-        # is suppressed), it must NOT depose the master — that caused a master-flip
-        # on hardware. Only the master *leaving* re-elects (remove_player).
-
-    def remove_player(self, pid: int) -> None:
-        was_master = pid == self.master_id
-        self._decoders.pop(pid, None)
-        if was_master or not self._decoders:
-            self._reset_round()  # master left (or ring empty) → re-elect (D-04)
-
-    def _reset_round(self) -> None:
-        self.phase = "electing" if self._decoders else "idle"
-        self.master_id = None
-        self.last_count = None
-
-    def feed(self, pid: int, data: bytes) -> "tuple[list[str], bytes]":
-        """Decode one player's OUT bytes, update the ring view, and return
-        (events, forward_bytes). forward_bytes drops a **non-master's stray
-        MASTER-ELECT `0x00`** once a master is established (EPIC-08 STORY-02):
-        per the thesis, a node that *receives* a `0x00` becomes SLAVE, so a stray
-        `0x00` from another node would DEMOTE the sitting master and abort
-        COUNT-PLAYERS — which is exactly the "0 machines" failure. Count values,
-        the master's own bytes, and in-game joystick `0x00` are left untouched
-        (the decoder distinguishes them). Caller applies forward_bytes only when
-        coordination is enabled."""
-        decoder = self._decoders.get(pid)
-        if decoder is None:
-            return [], data
-        events: "list[str]" = []
-        forward = bytearray()
-        for b in data:
-            byte_events = decoder._byte(b)
-            for event in byte_events:
-                events.append(event)
-                self._observe(pid, event)
-            demote = (
-                byte_events == ["MASTER-ELECT"]
-                and self.master_id is not None
-                and pid != self.master_id
-                and self.phase in ("counting", "name-dialog", "in-game")
-            )
-            if not demote:
-                forward.append(b)
-        return events, bytes(forward)
-
-    def _observe(self, pid: int, event: str) -> None:
-        # NB: do NOT designate the master from MASTER-ELECT (`0x00`) — both nodes
-        # send it and it's ambiguous. The reliable signal is who *originates*
-        # COUNT-PLAYERS / NAME-DIALOG / START-GAME (only the master does).
-        if event == "MASTER-ELECT":
-            if self.phase in ("idle", "in-game", "terminated"):
-                self.phase = "electing"
-        elif event.startswith("COUNT-PLAYERS"):  # "-start" (on 0x80) or "(n=…)"
-            self.phase = "counting"
-            if self.master_id is None:
-                self.master_id = pid  # first to originate the count = master
-            if "n=" in event:
-                try:
-                    self.last_count = int(event.split("n=")[1].rstrip(")"))
-                except (IndexError, ValueError):
-                    pass
-        elif event == "NAME-DIALOG":
-            self.phase = "name-dialog"
-            if self.master_id is None:
-                self.master_id = pid
-        elif event == "START-GAME":
-            if self.master_id is None:
-                self.master_id = pid
-            self.phase = "in-game"
-        elif event.startswith("SEND-DATA"):
-            self.phase = "in-game"
-        elif event == "TERMINATE-GAME":
-            self.phase = "terminated"
-
-    def snapshot(self) -> dict:
-        return {
-            "phase": self.phase,
-            "master": self.master_id,
-            "players": len(self._decoders),
-            "last_count": self.last_count,
-        }
-
-
-_ring = RingState()  # the single global ring's protocol state (D-04)
-_coordinate = False  # --coordinate: protect the established master (EPIC-08 STORY-02)
-
-
 def _should_dedup_ip(ip: str) -> bool:
     """Whether one-connection-per-IP applies to this peer.
 
@@ -273,6 +165,7 @@ class Player:
     connected_at: float  # event-loop clock (seconds); for uptime
     bytes_out: int = 0  # bytes received FROM the player (their MIDI OUT)
     bytes_in: int = 0  # bytes sent TO the player (their MIDI IN)
+    inspector: "MidiMazeInspector | None" = None  # per-player --inspect decoder
 
 
 class Registry:
@@ -363,7 +256,8 @@ async def handle_player(
         connected_at=asyncio.get_event_loop().time(),
     )
     registry.add(player)
-    _ring.add_player(player.id)
+    if _inspect:
+        player.inspector = MidiMazeInspector()
     LOG.info("player %d connected from %s (%d online)", player.id, peer, len(registry))
 
     try:
@@ -373,28 +267,22 @@ async def handle_player(
                 break  # clean EOF (peer closed)
             player.bytes_out += len(data)
             # Forward this player's OUT bytes to the next player's IN, verbatim
-            # (D-02). Single source per target, so no interleaving.
+            # (D-02) — a dumb relay; the firmware owns the ring (EPIC-09). Single
+            # source per target, so no interleaving.
             target = registry.next_player(player)
-            # Update the ring view and (when coordinating) get the bytes to forward
-            # with a non-master's demotion 0x00 filtered out (STORY-02).
-            events, forward = _ring.feed(player.id, data)
-            relay_data = forward if _coordinate else data
-            if _inspect:
-                note = ""
-                if _coordinate and len(forward) != len(data):
-                    note = f"  [coordinator dropped {len(data) - len(forward)} demote 0x00]"
-                LOG.info("inspect p%d(%s) -> p%s: %s | %s%s", player.id, peer,
+            if player.inspector is not None:  # --inspect: read-only protocol decode
+                LOG.info("inspect p%d(%s) -> p%s: %s | %s", player.id, peer,
                          target.id if target else "-", data.hex(" "),
-                         " ".join(events), note)
-            if target is None or not relay_data:
-                continue  # no ring peer yet (lone node), or everything was filtered
+                         " ".join(player.inspector.feed(data)))
+            if target is None:
+                continue  # no ring peer yet (lone node)
             try:
-                target.writer.write(relay_data)
+                target.writer.write(data)
                 # Bound the wait so one stuck player can't freeze the ring.
                 await asyncio.wait_for(
                     target.writer.drain(), timeout=SLOW_PLAYER_TIMEOUT_S
                 )
-                target.bytes_in += len(relay_data)
+                target.bytes_in += len(data)
             except asyncio.TimeoutError:
                 _drop_player(target, "too slow (write backpressure)")
             except (ConnectionError, OSError):
@@ -405,7 +293,6 @@ async def handle_player(
         LOG.exception("player %d (%s) handler crashed", player.id, peer)
     finally:
         registry.remove(player.id)
-        _ring.remove_player(player.id)
         writer.close()  # don't await wait_closed(): can hang under shutdown-cancel
         LOG.info(
             "player %d (%s) disconnected; %d bytes out / %d in (%d online)",
@@ -430,7 +317,6 @@ def _status_snapshot() -> dict:
         "listen": _listen_addr,
         "players_online": len(players),
         "ring": [p.id for p in players],  # ring order = insertion order, wraps
-        "protocol": _ring.snapshot(),  # EPIC-08: master / phase / last count (read-only)
         "players": [
             {
                 "id": p.id,
@@ -478,7 +364,6 @@ def _status_html() -> bytes:
         "<h1>MIDI-to-IP orchestrator</h1>"
         "<p>uptime {uptime_s}s &middot; game {listen} &middot; players online {players_online}</p>"
         "<p>ring: {ring}</p>"
-        "<p>protocol: phase <b>{phase}</b> &middot; master {master} &middot; last count {last_count}</p>"
         "<table><tr><th>id</th><th>peer</th><th>connected</th>"
         "<th>bytes out</th><th>bytes in</th></tr>{rows}</table>"
         "</body></html>"
@@ -487,9 +372,6 @@ def _status_html() -> bytes:
         listen=html.escape(s["listen"]),
         players_online=s["players_online"],
         ring=ring_str,
-        phase=html.escape(s["protocol"]["phase"]),
-        master=s["protocol"]["master"] if s["protocol"]["master"] is not None else "—",
-        last_count=s["protocol"]["last_count"] if s["protocol"]["last_count"] is not None else "—",
         rows=rows or "<tr><td colspan='5'>(no players)</td></tr>",
     )
     return page.encode("utf-8")
@@ -603,15 +485,9 @@ def main() -> None:
         "--inspect", action="store_true",
         help="decode + log the MIDI Maze protocol as traffic passes (read-only)",
     )
-    parser.add_argument(
-        "--coordinate", action="store_true",
-        help="protect the established master: drop a non-master's stray MASTER-ELECT "
-             "0x00 so it can't demote the master mid-count (EPIC-08; off = dumb relay)",
-    )
     args = parser.parse_args()
-    global _inspect, _coordinate
+    global _inspect
     _inspect = args.inspect
-    _coordinate = args.coordinate
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )

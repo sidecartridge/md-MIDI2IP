@@ -7,6 +7,9 @@ Spawns orchestrator.py on test ports and validates it end to end:
     (Both clients are on loopback, which is exempt from the per-IP dedup.)
   Phase B (dedup classification): one-connection-per-IP applies to private LAN
     addresses only — not public (NAT may hide many) or loopback (local testing).
+  Phase C (--inspect decoder): the read-only MidiMazeInspector decodes a protocol
+    byte stream into event labels (the only protocol awareness left after the
+    relay went back to dumb — EPIC-11 STORY-01).
 
 Stdlib only. Exit code 0 = PASS, 1 = FAIL.
 
@@ -140,72 +143,22 @@ def main() -> int:
     check("loopback -> no dedup (local testing)", orch._should_dedup_ip("127.0.0.1") is False)
     check("invalid -> no dedup", orch._should_dedup_ip("not-an-ip") is False)
 
-    # Phase C — EPIC-08 STORY-01 ring protocol-state model (no hardware): feed
-    # recorded MIDI Maze byte sequences and assert the inferred phase/master/count.
-    print("ring protocol-state model (EPIC-08 STORY-01):")
-    r = orch.RingState()
-    r.add_player(1)
-    r.add_player(2)
-    check("2 players -> electing", r.snapshot()["phase"] == "electing")
-    r.feed(1, b"\x00")
-    r.feed(2, b"\x00")
-    check("master election keeps electing", r.snapshot()["phase"] == "electing")
-    r.feed(1, b"\x80\x02")  # player 1 originates COUNT-PLAYERS(n=2)
-    snap = r.snapshot()
-    check("count -> counting", snap["phase"] == "counting")
-    check("count master = originator (p1)", snap["master"] == 1)
-    check("count value parsed (2)", snap["last_count"] == 2)
-    r.feed(1, b"\x84")  # START-GAME (master only)
-    check("start-game -> in-game", r.snapshot()["phase"] == "in-game")
-    r.feed(1, b"\x82")  # TERMINATE-GAME
-    check("terminate -> terminated", r.snapshot()["phase"] == "terminated")
-    r.add_player(3)  # a join keeps the sitting master (newcomer becomes a slave)
-    check("join keeps the master (no flip)", r.snapshot()["master"] == 1)
-    r.remove_player(1)  # the master *leaving* re-elects (D-04)
-    reset = r.snapshot()
-    check("master-leave clears master", reset["master"] is None)
-    check("master-leave re-elects (electing)", reset["phase"] == "electing")
-
-    # Phase D — EPIC-08 STORY-02 master-protection: once a master is established
-    # (it sent COUNT-PLAYERS), a *non-master's* stray MASTER-ELECT 0x00 is dropped
-    # from the forwarded bytes so it can't demote the master mid-count. Count
-    # values, the master's own 0x00, and in-game joystick 0x00 are untouched.
-    print("master-protection coordinator (EPIC-08 STORY-02):")
-    r2 = orch.RingState()
-    r2.add_player(1)
-    r2.add_player(2)
-    _, fwd = r2.feed(2, b"\x00")  # election: 0x00 NOT designated master, NOT dropped
-    check("0x00 forwarded during election", fwd == b"\x00")
-    check("election locks no master from 0x00", r2.snapshot()["master"] is None)
-    r2.feed(1, b"\x80\x02")  # player 1 originates COUNT-PLAYERS -> master = 1
-    check("count originator = master", r2.snapshot()["master"] == 1)
-    _, fwd = r2.feed(2, b"\x00")  # non-master stray 0x00 while counting -> DROPPED
-    check("non-master demote 0x00 dropped while counting", fwd == b"")
-    _, fwd = r2.feed(1, b"\x00")  # the master's own 0x00 -> kept
-    check("master's own 0x00 kept", fwd == b"\x00")
-    _, fwd = r2.feed(2, b"\x80\x00")  # a count *value* 0x00 (after 0x80) -> kept
-    check("count value 0x00 kept", fwd == b"\x80\x00")
-
-    with server(5097, 8097, "--coordinate"):
-        m, s = conn(5097), conn(5097)  # m connects first
-        time.sleep(0.3)
-        m.sendall(b"\x80\x02")  # m originates COUNT-PLAYERS -> m is master
-        time.sleep(0.2)
-        recv_exact(s, 2)        # drain m's count from the slave
-        s.sendall(b"\x00")      # slave stray MASTER-ELECT -> must be dropped, not reach m
-        time.sleep(0.2)
-        check("slave demote 0x00 not relayed to master", try_recv(m) == b"")
-        st = status(8097)
-        ids = sorted(p["id"] for p in st["players"])
-        check("status master = count originator (m)", st["protocol"]["master"] == ids[0])
-        m.close()
-        s.close()
+    # Phase C — the --inspect protocol decoder (the only protocol awareness left
+    # after EPIC-11 STORY-01 returned the relay to dumb). Read-only, off the relay
+    # path — it decodes a player's OUT stream into event labels for the log.
+    print("--inspect protocol decoder:")
+    insp = orch.MidiMazeInspector()
+    check("0x80 -> COUNT-PLAYERS-start", insp.feed(b"\x80") == ["COUNT-PLAYERS-start"])
+    check("count byte -> COUNT-PLAYERS(n=2)", insp.feed(b"\x02") == ["COUNT-PLAYERS(n=2)"])
+    check("0x84 -> START-GAME", insp.feed(b"\x84") == ["START-GAME"])
+    check("0x82 -> TERMINATE-GAME", insp.feed(b"\x82") == ["TERMINATE-GAME"])
+    check("0x86 -> NAME-DIALOG", insp.feed(b"\x86") == ["NAME-DIALOG"])
 
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")
         return 1
-    print("PASS — orchestrator ring + IP-dedup + protocol model + master-protection")
+    print("PASS — orchestrator dumb relay + IP-dedup + --inspect decoder")
     return 0
 
 
