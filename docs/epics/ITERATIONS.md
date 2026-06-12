@@ -8,8 +8,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | Iteration | Theme | Status |
 | --- | --- | --- |
 | 1 | Architecture spike — build the full stack end to end | done |
-| 2 | Transport redesign + hardware re-validation | in progress (EPIC-09 done, EPIC-10 todo) |
-| 3 | Orchestrator revamp — dumb relay + observability | todo (EPIC-11) |
+| 2 | Transport redesign, HW re-validation + orchestrator revamp | in progress (EPIC-09, EPIC-10 done; EPIC-11 todo) |
 
 ---
 
@@ -53,37 +52,22 @@ the smart orchestrator single-node against a real client (EPIC-08 STORY-04).
 
 ---
 
-## Iteration 2 — Transport redesign
+## Iteration 2 — Transport redesign + orchestrator revamp
 
 **Goal:** kill the per-byte handshake (D-12) so throughput beats the physical MIDI
-ring, then validate a full match for real.
+ring and validate a full match for real, then — with the firmware now owning the
+ring — revamp the orchestrator into a dumb relay with real observability.
 
 **Epics**
 
 | Epic | Status | Note |
 | --- | --- | --- |
 | EPIC-09 · Stream MIDI over the commemul ROM3 ring | done | D-12 fixed — MIDI Maze playable over IP on hardware |
-| EPIC-10 · Hardware validation II | todo | full 2-player HW match + CI gate; gated on EPIC-09 |
+| EPIC-10 · Hardware validation II | done | 2-player HW match validated by playable gameplay; build CI gate green |
+| EPIC-11 · Orchestrator revamp — dumb relay + observability | todo | retire RingState (keep `--inspect`); status.json telemetry + ring-viz HTML; reverse-DNS; 10 s stale-buffer cleanup |
 
 **Outcome (in progress):** EPIC-09 landed — the per-byte handshake is gone (the
 commemul fast path: bit-8 OUT, bit-9 IN + confirm-ack, OUT ring, stale-queue flush),
-and MIDI Maze plays multiplayer over IP on real hardware (closing D-12). EPIC-10
-(full 2-player HW match + CI gate) remains.
-
-EPIC-10 carries the two Iteration-1 validation stories that were blocked by D-12:
-STORY-01 (automated CI gate, from EPIC-07) and STORY-02 (full 2-player hardware
-match, from EPIC-08).
-
----
-
-## Iteration 3 — Orchestrator revamp
-
-**Goal:** with the firmware now owning the MIDI ring (EPIC-09), simplify the
-orchestrator back to a dumb byte relay and give it real observability — a live ring
-visualization, per-node telemetry, reverse-DNS naming, and stale-buffer hygiene.
-
-**Epics**
-
-| Epic | Status | Note |
-| --- | --- | --- |
-| EPIC-11 · Orchestrator revamp — dumb relay + observability | todo | retire RingState (keep `--inspect`); status.json telemetry + ring-viz HTML; reverse-DNS; 10 s stale-buffer cleanup |
+and MIDI Maze plays multiplayer over IP on real hardware (closing D-12). EPIC-10's
+2-player hardware match is validated by playable gameplay. EPIC-11 (orchestrator
+revamp) is the remaining work.

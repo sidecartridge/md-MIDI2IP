@@ -2,7 +2,7 @@
 id: EPIC-10
 iteration: 2
 title: Hardware validation II
-status: todo
+status: done
 ---
 
 ## Goal
