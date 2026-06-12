@@ -274,6 +274,11 @@ void cmdFirmware(const char *arg) {
   // beq's into rom_function, which jmp's to USERFW (target/atarist/src/
   // userfw.s). The default userfw demo prints
   // "Example firmware load..." via Cconws and returns.
+  // The BIOS hook was installed at boot (USERFW). The menu's command phase is
+  // over, so commit the fast-path stream now. Do NOT clear the command handlers:
+  // a warm reset re-runs the boot install (a save-vector command) and still
+  // needs them. The midiActive gate + the bit-10 deactivate keep gameplay clean.
+  midi_set_active(true);
   SEND_COMMAND_TO_DISPLAY(DISPLAY_COMMAND_START);
 }
 

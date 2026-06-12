@@ -23,4 +23,9 @@ typedef void (*CommEmulSampleCallback)(uint16_t sample);
 int commemul_init(void);
 void __not_in_flash_func(commemul_poll)(CommEmulSampleCallback callback);
 
+// DEBUG instrumentation. samplesWritten = total ROM3 captures the DMA has
+// deposited (monotonic); ringDepth = unread samples right now.
+uint32_t commemul_samplesWritten(void);
+uint32_t commemul_ringDepth(void);
+
 #endif  // COMMEMUL_H

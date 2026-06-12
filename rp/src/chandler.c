@@ -28,6 +28,10 @@ static uint32_t memoryRandomTokenAddress = 0;
 static CommandCallbackNode *callbackListHead = NULL;
 static unsigned int callbackListCount = 0;
 
+// Raw per-sample consumer (EPIC-09 MIDI fast path), invoked before the parser.
+static ChandlerRawConsumer rawConsumer = NULL;
+void chandler_setRawConsumer(ChandlerRawConsumer cb) { rawConsumer = cb; }
+
 static inline void __not_in_flash_func(chandler_clear_pending_protocol)(void) {
   pendingProtocol.command_id = 0;
   pendingProtocol.payload_size = 0;
@@ -114,6 +118,25 @@ void __not_in_flash_func(chandler_addCB)(CommandCallback cb) {
   callbackListCount++;
 }
 
+// EPIC-09: drop ALL registered command callbacks. Deferred (sets a flag) so it is
+// safe to call from inside a callback during chandler_loop's dispatch — the free
+// happens at the end of the current iteration. Used to retire the menu/command
+// handlers once the firmware is live (gameplay is pure MIDI). The raw consumer is
+// separate and survives.
+static volatile bool clearRequested = false;
+void chandler_clearCB(void) { clearRequested = true; }
+
+static void chandler_doClearCB(void) {
+  CommandCallbackNode *cur = callbackListHead;
+  while (cur) {
+    CommandCallbackNode *next = cur->next;
+    free(cur);
+    cur = next;
+  }
+  callbackListHead = NULL;
+  callbackListCount = 0;
+}
+
 static inline void __not_in_flash_func(handle_protocol_command)(
     const TransmissionProtocol *protocol) {
   uint16_t size = tprotocol_clamp_payload_size(protocol->payload_size);
@@ -143,6 +166,10 @@ static inline void __not_in_flash_func(handle_protocol_checksum_error)(
 static inline void __not_in_flash_func(chandler_consume_rom3_sample)(
     uint16_t sample) {
   uint16_t addr_lsb = (uint16_t)(sample ^ CHANDLER_ADDRESS_HIGH_BIT);
+
+  if (rawConsumer && rawConsumer(addr_lsb)) {
+    return;  // handled by the MIDI fast-path stream (EPIC-09)
+  }
 
   tprotocol_parse(addr_lsb, handle_protocol_command,
                   handle_protocol_checksum_error);
@@ -189,4 +216,9 @@ void __not_in_flash_func(chandler_loop)() {
       (((uint64_t)incrementalCmdCount) << 32) | randomToken);
 
   chandler_clear_pending_protocol();
+
+  if (clearRequested) {  // a callback asked to drop all handlers (EPIC-09)
+    clearRequested = false;
+    chandler_doClearCB();
+  }
 }

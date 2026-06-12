@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-09
 title: OUT byte-stream — fire-and-forget Bconout over commemul (bit 8)
-status: todo
+status: in-progress
 ---
 
 ## Goal

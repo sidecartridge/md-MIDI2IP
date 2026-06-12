@@ -31,12 +31,22 @@
 #define CMD_MIDI_SEND ((APP_MIDI << 8) | 0x01)  // 0x0301: m68k -> RP, ship OUT bytes
 #define CMD_MIDI_RECV ((APP_MIDI << 8) | 0x02)  // 0x0302: m68k -> RP, request IN bytes
 
+// --- EPIC-09 fast-path stream markers (commemul samples, post-XOR; must match
+// userfw.s). The OUT byte streams to the RP as a single ROM3 read; the RP routes
+// it before the TPROTOCOL parser. Gated by midiActive (midi.c) so they never
+// collide with a live command frame's payload words during config.
+#define MIDI_OUT_MARKER 0x0100u  // bit 8: a MIDI OUT byte (ST->RP); low 8 = byte
+#define MIDI_IN_ADVANCE 0x0200u  // bit 9: IN consume signal (STORY-02)
+#define MIDI_DEACTIVATE 0x0400u  // bit 10: ST re-booted — drop the gate so the
+                                 // re-install's command frame works (warm reset)
+
 // Shared MIDI-IN fields in the APP_FREE arena ($FA2300), written by the RP and
 // read by the m68k (which owns no state in the ROM region). The BIOS hook acts
 // as the MIDI device: it reads the depth for Bconstat and pops one byte for
 // Bconin (EPIC-08).
-#define MIDI_IN_COUNT_OFFSET CHANDLER_APP_FREE_OFFSET         // longword: RP queue depth (Bconstat)
+#define MIDI_IN_STATUS_OFFSET CHANDLER_APP_FREE_OFFSET        // longword: pre-baked Bconstat return, -1 = char ready / 0 = none (also the Bconin spin flag)
 #define MIDI_IN_BUFFER_OFFSET (CHANDLER_APP_FREE_OFFSET + 4)  // longword: one popped byte (Bconin)
+#define MIDI_IN_ACK_OFFSET (CHANDLER_APP_FREE_OFFSET + 8)     // longword: advance-ack; RP bumps it after a pop+republish so Bconin can block until consumed
 
 // --- Per-app config keys (EPIC-06 STORY-01) — stored in aconfig / CONFIG_FLASH ---
 #define MIDI_CFG_HOST "MIDI_HOST"        // string: orchestrator host (IP for now)
@@ -57,6 +67,10 @@ void midi_net_poll(void);
 // EPIC-06 STORY-04: re-read the endpoint config (host/port/enabled) and restart
 // the connection so an edit applies live (drop + reconnect to the new endpoint).
 void midi_net_reload(void);
+
+// Commit the fast-path MIDI stream (EPIC-09). Called RP-side at firmware launch,
+// before the ST begins emitting MIDI — see cmdFirmware / md-devops firmware mode.
+void midi_set_active(bool active);
 
 // EPIC-03 STORY-04: orchestrator link state for display ("up"/"connecting"/"down").
 const char *midi_net_status_str(void);

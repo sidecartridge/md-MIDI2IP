@@ -2,7 +2,7 @@
 id: STORY-02
 epic: EPIC-09
 title: IN ring — fire-and-forget Bconin via RP-owned ring + bit-9 advance
-status: todo
+status: in-progress
 ---
 
 ## Goal
