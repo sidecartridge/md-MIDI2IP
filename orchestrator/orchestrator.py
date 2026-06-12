@@ -450,8 +450,15 @@ _STATUS_PAGE = (
     "if(!n){el('text',{x:CX,y:CY,class:'empty'},N).textContent="
     "'(no nodes connected)';return}"
     "const P=ps.map((p,i)=>pos(i,n));"
-    "if(n>1)for(let i=0;i<n;i++){const A=P[i],B=P[(i+1)%n];"
-    "el('line',{class:'edge',x1:A[0],y1:A[1],x2:B[0],y2:B[1]},E)}"
+    # edges: data flows OUT of a node into the next node's IN, drawn as an arc
+    # along the ring (arrowhead = direction). n=1 echoes to itself (a self-loop).
+    "if(n===1){el('path',{class:'edge',d:'M '+(CX+38)+' '+(CY-14)+' C '+(CX+86)"
+    "+' '+(CY-86)+' '+(CX-86)+' '+(CY-86)+' '+(CX-38)+' '+(CY-14)},E)}"
+    "else{const G=36/R+0.05;for(let i=0;i<n;i++){"
+    "const a1=(i/n)*2*Math.PI-Math.PI/2+G,a2=((i+1)/n)*2*Math.PI-Math.PI/2-G;"
+    "const x1=CX+R*Math.cos(a1),y1=CY+R*Math.sin(a1),"
+    "x2=CX+R*Math.cos(a2),y2=CY+R*Math.sin(a2);"
+    "el('path',{class:'edge',d:'M '+x1+' '+y1+' A '+R+' '+R+' 0 0 1 '+x2+' '+y2},E)}}"
     "ps.forEach((p,i)=>{const X=P[i][0],Y=P[i][1];"
     "const gg=el('g',{class:'node'+(p.idle_s>STALE?' stalled':'')},N);"
     "el('circle',{cx:X,cy:Y,r:36},gg);"
