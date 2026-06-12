@@ -69,6 +69,9 @@ CMD_BOOT_GEM		equ 2		; Boot GEM command
 CMD_TERMINAL		equ 3		; Terminal command
 CMD_START			equ 4		; Hand control to the user firmware (USERFW)
 
+; The MIDI BIOS device-3 hook is installed at boot by USERFW (userfw.s), reached
+; via the `jsr USERFW` in start_rom_code — while send_sync commands still work.
+
 _conterm			equ $484	; Conterm device number
 
 
@@ -238,6 +241,11 @@ start_rom_code:
 ; Enable bconin to return shift key status
 	or.b #%1000, _conterm.w
 
+; Install the MIDI BIOS device-3 hook NOW, at boot, while send_sync commands
+; still work. The install lives in userfw.s (so its own XBRA/hook labels resolve
+; under its org) and is reached here via the USERFW constant (EPIC-09).
+	jsr USERFW
+
 ; Get the resolution of the screen
 	get_rez
 	cmp.w #2, d0				; Check if the resolution is 640x400 (high resolution)
@@ -336,7 +344,10 @@ boot_gem:
 ; the same way md-drives-emulator's rom_function dispatches into
 ; GEMDRIVE/FLOPPYEMUL/ACSIEMUL/RTCEMUL.
 rom_function:
-    jmp USERFW
+    ; CMD_START / firmware launch: the BIOS hook is already installed (at boot,
+    ; via the USERFW jsr), so just boot GEM. The fast-path gate is committed
+    ; RP-side (cmdFirmware -> midi_set_active). EPIC-09.
+    bra boot_gem
 
 ; Shared functions included at the end of the file
 ; Don't forget to include the macros for the shared functions at the top of file

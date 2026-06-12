@@ -102,4 +102,15 @@ void __not_in_flash_func(chandler_loop)();
 
 void __not_in_flash_func(chandler_addCB)(CommandCallback cb);
 
+// Drop ALL registered command callbacks. Safe to call from inside a callback
+// (deferred to the end of chandler_loop). The raw consumer is unaffected.
+void chandler_clearCB(void);
+
+// Raw ROM3 sample consumer: invoked per sample BEFORE the TPROTOCOL parser, with
+// the un-biased address LSB (sample ^ CHANDLER_ADDRESS_HIGH_BIT). Return true if
+// the sample was handled (skip the parser), false to fall through to it. Used by
+// the MIDI fast-path byte stream (EPIC-09).
+typedef bool (*ChandlerRawConsumer)(uint16_t addr_lsb);
+void chandler_setRawConsumer(ChandlerRawConsumer cb);
+
 #endif  // CHANDLER_H

@@ -25,18 +25,30 @@
 ROM4_ADDR            equ $FA0000
 
 ; --- MIDI app command namespace (must match rp/src/include/midi.h) ---
+; The only MIDI command left is the boot-time save-vector; OUT/IN are the
+; commemul fast path (EPIC-09), so the EPIC-02 per-byte CMD_MIDI_SEND/RECV
+; commands are retired.
 APP_MIDI             equ $0300
 CMD_MIDI_SAVE_VECTOR equ (APP_MIDI + 0)          ; $0300: patch a ROM longword field
 
-; --- EPIC-02 byte pipe (must match rp/src/include/midi.h) ---
-; Dumb transport: ship captured OUT bytes to the RP, pull pending IN bytes back.
-CMD_MIDI_SEND        equ (APP_MIDI + 1)          ; $0301: m68k -> RP, ship OUT bytes
-CMD_MIDI_RECV        equ (APP_MIDI + 2)          ; $0302: m68k -> RP, request IN bytes
-
 ; Shared MIDI-IN fields in the APP_FREE arena, written by the RP and read by the
 ; m68k (which owns no state in the ROM region):
-MIDI_IN_COUNT_ADDR   equ (ROM4_ADDR + $2300)     ; $FA2300: pending byte count (RP queue depth)
-MIDI_IN_BYTE_ADDR    equ (ROM4_ADDR + $2304)     ; $FA2304: byte popped by CMD_MIDI_RECV (low 8 bits)
+MIDI_IN_STATUS_ADDR  equ (ROM4_ADDR + $2300)     ; $FA2300: pre-baked Bconstat (-1 ready / 0 none); also the Bconin ready flag
+MIDI_IN_BYTE_ADDR    equ (ROM4_ADDR + $2304)     ; $FA2304: head byte for Bconin (low 8 bits)
+MIDI_IN_ACK_ADDR     equ (ROM4_ADDR + $2308)     ; $FA2308: advance-ack counter — RP bumps it after it pops + republishes
+
+; --- EPIC-09 fast-path OUT stream (commemul, fire-and-forget; must match midi.h) ---
+; Each OUT byte is a single ROM3 read whose address encodes the byte:
+;   $FB8000 (ROMCMD_START_ADDR + mid-window bias) + MIDI_OUT_MARKER + byte.
+; The RP recovers (addr ^ $8000) and routes bit-8 samples to the network — no
+; frame, no token, no wait. (bit 9 = MIDI_IN_ADVANCE is added in STORY-02.)
+ROM3_SYNC_BASE       equ ($FB0000 + $8000)       ; ROMCMD_START_ADDR + bias (matches send_sync)
+MIDI_OUT_MARKER      equ $0100                   ; bit 8: a MIDI OUT byte
+ROM3_MIDI_OUT_ADDR   equ (ROM3_SYNC_BASE + MIDI_OUT_MARKER)
+MIDI_IN_ADV_MARKER   equ $0200                   ; bit 9: IN consume/advance signal
+ROM3_MIDI_IN_ADV_ADDR equ (ROM3_SYNC_BASE + MIDI_IN_ADV_MARKER)
+MIDI_DEACT_MARKER    equ $0400                   ; bit 10: warm-reset gate deactivate
+ROM3_MIDI_DEACTIVATE_ADDR equ (ROM3_SYNC_BASE + MIDI_DEACT_MARKER)
 
 ; --- BIOS install ---
 Setexc               equ 5           ; BIOS function 5: Setexc(vecnum, newvec)
@@ -53,9 +65,8 @@ MIDI_DEV             equ 3           ; BIOS device 3 = MIDI
 ; 68010+ (long frames). Used to locate the trap arguments on the stack.
 _longframe           equ $59E
 
-; Sync-command helper, defined in main.s (org'd absolute at $FA0000). We
-; call it through a 32-bit pointer; a plain cross-module `bsr` overflows
-; the 16-bit PC-relative displacement.
+; Sync-command helper (defined in main.s, org'd absolute at $FA0000). Called
+; through a 32-bit pointer; a cross-module bsr overflows the 16-bit displacement.
     xref send_sync_command_to_sidecart
 
     section text
@@ -67,15 +78,19 @@ _longframe           equ $59E
     org (ROM4_ADDR + $800)
 
 ; ---------------------------------------------------------------------
-; USERFW entry point. Install the BIOS hook, then return so the cartridge init
-; continues booting. MIDI Maze does ALL its MIDI ring traffic through the BIOS
-; (Bconstat / Bconin / Bconout, device 3) — not XBIOS — so that is the only hook
-; we install.
+; USERFW: install the BIOS device-3 hook. Reached via `jsr USERFW` from main.s
+; start_rom_code AT BOOT, while send_sync commands still work (the firmware is
+; then pure tst.b). CMD_START/launch no longer routes here — main.s rom_function
+; boots GEM directly since the hook is already installed.
+;
+; First fire a one-cycle "deactivate": on a WARM RESET the RP still has the gate
+; up from the previous session, which would steal this command frame; the signal
+; drops it first. No-op on a cold boot (the RP gate is already down).
 ; ---------------------------------------------------------------------
 userfw:
-    ; --- BIOS / trap #13 (install via Setexc) ---
-    ; The hook IS the MIDI device: it answers Bconstat/Bconin/Bconout (device 3)
-    ; directly from the RP, so no Iorec is involved.
+    movea.l #ROM3_MIDI_DEACTIVATE_ADDR, a0
+    tst.b   (a0)                         ; warm-reset: RP drops the gate first
+    ; --- install the device-3 hook via Setexc, saving the original vector ---
     move.l  TRAP13_VECTOR.w, d3          ; d3 = original BIOS vector
     move.l  #bios_xbra_old, d4
     bsr     midi_save_vector             ; RP patches *bios_xbra_old = d3
@@ -91,7 +106,7 @@ userfw:
 
 ; ---------------------------------------------------------------------
 ; Patch a ROM longword via the RP (the XBRA <old> field). In: d3 = value,
-; d4 = field address. Out: d0 = 0 on success. Clobbers d0-d7 / a0-a3.
+; d4 = field address. Out: d0 = 0 on success.
 ; ---------------------------------------------------------------------
 midi_save_vector:
     moveq   #8, d1                       ; payload: d3 (value) + d4 (addr)
@@ -101,11 +116,14 @@ midi_save_vector:
     rts
 
 ; ---------------------------------------------------------------------
-; BIOS (trap #13) hook, XBRA-wrapped. The hook IS the MIDI device for device 3:
-;   Bconstat(3) -> d0 = -1 if the RP has a pending byte (queue depth > 0) else 0
-;   Bconin(3)   -> pop one byte from the RP (CMD_MIDI_RECV), return it in d0
-;   Bconout(3)  -> ship the byte (CMD_MIDI_SEND), then chain to the real Bconout
-; Bconstat/Bconin are serviced directly (set d0, rte) — no Iorec, no chaining.
+; BIOS (trap #13) hook, XBRA-wrapped. The hook IS the MIDI device for device 3,
+; over the EPIC-09 commemul fast path (no commands, no token wait):
+;   Bconstat(3) -> d0 = pre-baked -1/0 status the RP published (char ready?)
+;   Bconin(3)   -> read the RP-published head byte, fire a bit-9 advance, wait
+;                  for the RP ack, return it in d0
+;   Bconout(3)  -> emit the byte as a single bit-8 ROM3 read (emit-only, the
+;                  network is the sink) — no chain to the physical Bconout
+; Bconstat/Bconin/Bconout are serviced directly (rte) — no Iorec, no ACIA.
 ; Any other device/function chains to the original BIOS untouched.
 ; ---------------------------------------------------------------------
     ds.b ((4 - (* & 3)) & 3)             ; 4-byte align (RP writes <old> as a longword)
@@ -129,51 +147,61 @@ midi_bios_trap:
     addq.w  #2, a0
 .mbt_notlong:
     cmp.w   #MIDI_DEV, 8(a0)            ; device 3 (MIDI)?
-    bne.s   .mbt_chain
+    beq.s   .mbt_not_chain
+    move.l  bios_xbra_old, -(sp)         ; chain to original (XBRA <old> field)
+    rts
+.mbt_not_chain:
     cmp.w   #Bconout, 6(a0)
     beq.s   .mbt_out
     cmp.w   #Bconin, 6(a0)
     beq.s   .mbt_in
     cmp.w   #Bconstat, 6(a0)
     beq.s   .mbt_stat
-    bra.s   .mbt_chain                  ; other device-3 function -> chain
-
-    ; --- Bconstat(3): char ready? (read the RP queue depth) ---
-.mbt_stat:
-    move.l  MIDI_IN_COUNT_ADDR, d0      ; pending byte count
-    beq.s   .mbt_rte                    ; 0 -> d0 = 0 (no char)
-    moveq   #-1, d0                     ; >0 -> d0 = -1 (char ready)
-    bra.s   .mbt_rte
-
-    ; --- Bconin(3): block until a byte, pop it from the RP, return it in d0 ---
-.mbt_in:
-    move.l  MIDI_IN_COUNT_ADDR, d0      ; spin until the RP has a byte
-    beq.s   .mbt_in
-    movem.l d3-d7/a3-a6, -(sp)          ; preserve all callee-saved regs (BIOS contract)             ; send_sync clobbers callee-saved regs
-    moveq   #0, d1
-    move.w  #CMD_MIDI_RECV, d0
-    move.l  #send_sync_command_to_sidecart, a0
-    jsr     (a0)
-    move.l  MIDI_IN_BYTE_ADDR, d0       ; the popped byte
-    and.l   #$ff, d0
-    movem.l (sp)+, d3-d7/a3-a6
-    bra.s   .mbt_rte
-
-    ; --- Bconout(3): ship the byte, then chain to the real Bconout ---
-.mbt_out:
-    movem.l d3-d7/a3-a6, -(sp)          ; preserve all callee-saved regs (BIOS contract)
-    moveq   #0, d3
-    move.b  11(a0), d3                  ; d3 = OUT byte (low byte)
-    moveq   #4, d1                      ; payload: d3
-    move.w  #CMD_MIDI_SEND, d0
-    move.l  #send_sync_command_to_sidecart, a0
-    jsr     (a0)
-    movem.l (sp)+, d3-d7/a3-a6
-    ; fall through to chain
-
-.mbt_chain:
     move.l  bios_xbra_old, -(sp)         ; chain to original (XBRA <old> field)
     rts
 
-.mbt_rte:
+    ; --- Bconstat(3): char ready? The RP pre-bakes the return (-1 = ready, 0 =
+    ; none), so just hand it back. ---
+.mbt_stat:
+    move.l  MIDI_IN_STATUS_ADDR, d0
     rte
+
+    ; --- Bconin(3): block until a byte, read the RP-published head, fire the
+    ; advance, then WAIT for the RP to ack (pop + republish) before returning.
+    ; Without the ack the stale MIDI_IN_STATUS lets MIDI Maze re-read the same
+    ; byte many times (IN_adv >> RX -> corrupted ring -> "too many machines").
+    ; Clobbers d0/d2/a1 (scratch under the BIOS contract), so no spill. ---
+.mbt_in:
+    move.l  MIDI_IN_STATUS_ADDR, d0     ; spin until the RP flags a byte ready (-1)
+    beq.s   .mbt_in
+    move.l  MIDI_IN_BYTE_ADDR, d0       ; the pre-published head byte
+    and.l   #$ff, d0
+    move.l  MIDI_IN_ACK_ADDR, d2        ; snapshot the advance-ack before consuming
+    movea.l #ROM3_MIDI_IN_ADV_ADDR, a1  ; bit-9 advance: "head consumed, move on"
+    tst.b   (a1)
+.mbt_in_ack:
+    cmp.l   MIDI_IN_ACK_ADDR, d2        ; block until the RP popped + republished, so
+    beq.s   .mbt_in_ack                 ; the next Bconstat/Bconin sees fresh state
+    rte
+
+    ; --- Bconout(3): ship the byte (fire-and-forget), then chain to the real
+    ; Bconout. One ROM3 read encodes the byte; no command, no token, no wait.
+    ; Clobbers only d1/a1 (scratch under the BIOS contract), so no spill. ---
+.mbt_out:
+    moveq   #0, d1
+    move.b  11(a0), d1                  ; d1 = OUT byte (low 8 bits)
+    movea.l #ROM3_MIDI_OUT_ADDR, a1     ; ROM3 OUT base ($FB8100)
+    tst.b   (a1, d1.w)                  ; emit: address = base + (bit 8 | byte)
+    moveq   #0, d0                      ; Bconout return
+    rte                                 ; emit-only: network IS the MIDI sink; no
+                                        ; chain into the physical ACIA path
+
+; Align the end of the module so the section length stays even — otherwise the
+; assembler can leave handler entry points (reached via Setexc / the dispatch)
+; on odd addresses, which faults on fetch (3 bombs = address error). Mirrors the
+; `even` guard at the end of main.s.
+    nop
+    nop
+    nop
+    nop
+    even

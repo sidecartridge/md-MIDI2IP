@@ -97,3 +97,24 @@ void __not_in_flash_func(commemul_poll)(CommEmulSampleCallback callback) {
     commReadIdx = (commReadIdx + 1u) & COMM_RING_MASK;
   }
 }
+
+// EPIC-09 DEBUG ring instrumentation. samplesWritten = total ROM3 captures the
+// DMA has deposited (grows on every cart-bus read the PIO sees) — if this stays
+// flat while the ST emits, the bus reads aren't being captured at all. ringDepth
+// = unread samples between the read index and the DMA head right now.
+uint32_t commemul_samplesWritten(void) {
+  if (!commInitialized) {
+    return 0;
+  }
+  return COMM_DMA_TRANSFER_COUNT - dma_hw->ch[commDmaChannel].transfer_count;
+}
+
+uint32_t commemul_ringDepth(void) {
+  if (!commInitialized) {
+    return 0;
+  }
+  uint32_t writeIdx =
+      (COMM_DMA_TRANSFER_COUNT - dma_hw->ch[commDmaChannel].transfer_count) &
+      COMM_RING_MASK;
+  return (writeIdx - commReadIdx) & COMM_RING_MASK;
+}

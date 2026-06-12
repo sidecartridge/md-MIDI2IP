@@ -21,6 +21,7 @@
 #include "aconfig.h"  // aconfig_getContext + settings_find_entry
 #include "blink.h"
 #include "chandler.h"
+#include "commemul.h"   // DEBUG: ring instrumentation
 #include "constants.h"  // __rom_in_ram_start__
 #include "debug.h"
 #include "lwip/ip_addr.h"
@@ -40,30 +41,72 @@
 static uint8_t midiInQueue[MIDI_IN_QUEUE_SIZE];
 static uint16_t midiInHead = 0;  // next write
 static uint16_t midiInTail = 0;  // next read
+static uint32_t midiInAck =
+    0;  // advance-ack: bumped after each pop+republish (Bconin sync)
 
-// DEBUG: command counters — printed once/sec as a rate (commands/s = inverse of
-// per-byte latency) to measure CMD_MIDI_SEND / CMD_MIDI_RECV throughput.
+// --- EPIC-09 OUT queue ---
+// MIDI Maze bursts OUT bytes (Bconout) faster than a per-byte tcp_write can
+// keep up — under a SEND-DATA burst the TCP send buffer/pbuf pool fills and
+// tcp_write returns !=ERR_OK, silently dropping the byte (OUT > RX -> a short
+// ring -> "fails to start"). Capture into this ring from the hot path; drain to
+// TCP in midi_net_poll (poll context), so bursts are absorbed and nothing is
+// lost. Same power-of-two single-producer/single-consumer pattern as IN.
+#define MIDI_OUT_QUEUE_SIZE 16384
+static uint8_t midiOutQueue[MIDI_OUT_QUEUE_SIZE];
+static uint16_t midiOutHead = 0;  // producer (bus loop / hot path)
+static uint16_t midiOutTail = 0;  // consumer (net poll)
+static uint32_t midiOutDrop = 0;  // DEBUG: ring-full drops (should stay 0)
+
+// --- Time-based staleness cleanup ---
+// If pending bytes aren't drained within this window — IN: consumed by the m68k
+// (Bconin), OUT: accepted by TCP — the consumer/link has stalled and the pending
+// bytes are stale. Flushing them lets a resumed peer resync instead of replaying
+// old traffic, which is what produces mid-game glitches. Each *LastDrain stamps
+// the last healthy moment (a drain, or an empty->non-empty fill that restarts the
+// window); the cleanup flushes a non-empty queue that has had none for STALE_MS.
+#define MIDI_QUEUE_STALE_MS 1000
+static absolute_time_t midiInLastDrain;
+static absolute_time_t midiOutLastDrain;
+
+// DEBUG: fast-path byte counters — printed once/sec as a rate (the MIDI/s trace,
+// currently #if 0). midiCmdSend = OUT bytes, midiCmdRecv = IN advances.
 static uint32_t midiCmdSend = 0;
 static uint32_t midiCmdRecv = 0;
+static uint32_t midiNetRx =
+    0;  // DEBUG: bytes received from the orchestrator (net -> IN queue)
+static volatile bool midiActive = false;  // EPIC-09 fast-path stream gate
 
 // Endpoint config (EPIC-06 STORY-01) — loaded from aconfig in midi_init().
 static char midiNetHost[SETTINGS_MAX_VALUE_LENGTH] = MIDI_DEFAULT_HOST;
 static uint16_t midiNetPort = MIDI_DEFAULT_PORT;
 static bool midiEnabled = true;
 
-static inline void __not_in_flash_func(midi_in_push)(uint8_t b) {
+static inline bool __not_in_flash_func(midi_in_push)(uint8_t b) {
   uint16_t next = (uint16_t)((midiInHead + 1) & (MIDI_IN_QUEUE_SIZE - 1));
-  if (next == midiInTail) return;  // full: drop
+  if (next == midiInTail) return false;  // full: drop
+  bool wasEmpty = (midiInHead == midiInTail);
   midiInQueue[midiInHead] = b;
   midiInHead = next;
+  // A byte landing in an empty queue restarts the staleness window.
+  if (wasEmpty) midiInLastDrain = get_absolute_time();
+  return true;
 }
 
-// Publish the IN-queue depth to the shared region so the m68k's Bconstat(3)
-// can read it without a command (the hook IS the MIDI device — EPIC-08).
-static inline void __not_in_flash_func(midi_publish_depth)(void) {
-  uint16_t depth = (uint16_t)((midiInHead - midiInTail) & (MIDI_IN_QUEUE_SIZE - 1));
-  WRITE_AND_SWAP_LONGWORD((unsigned int)&__rom_in_ram_start__, MIDI_IN_COUNT_OFFSET,
-                          depth);
+// EPIC-09 STORY-02 IN ring: publish the head byte (the next byte Bconin
+// returns) and the Bconstat status into the shared region. Byte FIRST, then
+// status, so the m68k — which spins on the status before reading the byte —
+// never sees a fresh "ready" paired with a stale head byte.
+static inline void __not_in_flash_func(midi_in_publish)(void) {
+  uint16_t depth =
+      (uint16_t)((midiInHead - midiInTail) & (MIDI_IN_QUEUE_SIZE - 1));
+  uint8_t head = (depth != 0) ? midiInQueue[midiInTail] : 0;
+  WRITE_LONGWORD_RAW((unsigned int)&__rom_in_ram_start__, MIDI_IN_BUFFER_OFFSET,
+                     (uint32_t)head * 0x01010101u);
+  // Pre-baked Bconstat return: -1 (0xFFFFFFFF) = char ready, 0 = none — so the
+  // m68k hook just `move.l`s it into d0 and rte. -1/0 are byte-swap-invariant.
+  // Also serves as the Bconin spin flag (non-zero = a byte is ready).
+  WRITE_AND_SWAP_LONGWORD((unsigned int)&__rom_in_ram_start__,
+                          MIDI_IN_STATUS_OFFSET, depth ? 0xFFFFFFFFu : 0u);
 }
 
 // --- EPIC-03 STORY-01: TCP client to the orchestrator ---
@@ -94,7 +137,7 @@ static absolute_time_t midiNetUpSince;  // when the current UP session connected
 // consumer/producer on the bus loop, so the index assignment is atomic enough.
 static void midi_net_flush_in_queue(void) {
   midiInTail = midiInHead;
-  midi_publish_depth();
+  midi_in_publish();
 }
 
 // Drop the PCB, flush stale IN bytes, and go DOWN. Safe from any callback.
@@ -125,15 +168,16 @@ static err_t midi_net_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
     pbuf_free(p);
     return err;
   }
-  // STORY-03: push received bytes into the IN queue; CMD_MIDI_RECV drains it
-  // into the shared buffer for the m68k. Opaque bytes (D-02) — no parsing.
+  // Push received bytes into the IN queue; the m68k's Bconin drains the head
+  // one byte at a time via the bit-9 advance. Opaque bytes (D-02) — no parsing.
   for (struct pbuf *q = p; q != NULL; q = q->next) {
     const uint8_t *bytes = (const uint8_t *)q->payload;
     for (uint16_t i = 0; i < q->len; i++) {
       midi_in_push(bytes[i]);
+      midiNetRx++;  // DEBUG: orchestrator echo arrived at the RP
     }
   }
-  midi_publish_depth();  // let the m68k's Bconstat see the new bytes
+  midi_in_publish();  // publish the new head byte + depth for Bconin/Bconstat
   tcp_recved(pcb, p->tot_len);
   pbuf_free(p);
   return ERR_OK;
@@ -186,12 +230,71 @@ static void midi_net_try_connect(void) {
 // STORY-02: send one OUT byte to the orchestrator. Dropped if the link is down
 // (gameplay needs the peer up; STORY-04 surfaces link state). tcp_output
 // flushes immediately — TCP_NODELAY, MIDI is latency-sensitive (C-01).
-static void midi_net_send_byte(uint8_t b) {
+static void __not_in_flash_func(midi_net_send_byte)(uint8_t b) {
+  // Hot path (bus loop): just enqueue. The drain to TCP happens in the poll
+  // context (midi_net_flush_out) so a full send buffer retries instead of
+  // dropping. Drop here only if the (large) ring is genuinely full.
+  uint16_t next = (uint16_t)((midiOutHead + 1) & (MIDI_OUT_QUEUE_SIZE - 1));
+  if (next == midiOutTail) {
+    midiOutDrop++;
+    return;
+  }
+  bool wasEmpty = (midiOutHead == midiOutTail);
+  midiOutQueue[midiOutHead] = b;
+  midiOutHead = next;
+  if (wasEmpty) midiOutLastDrain = get_absolute_time();
+}
+
+// Drain queued OUT bytes to the orchestrator. Poll context only. Writes in
+// contiguous runs up to the current TCP send window; if the buffer is full it
+// stops and the bytes wait in the ring for the next poll (no loss). One
+// tcp_output per drain coalesces the burst into proper segments.
+static void midi_net_flush_out(void) {
   if (midiNetState != MIDI_NET_UP || midiNetPcb == NULL) {
     return;
   }
-  if (tcp_write(midiNetPcb, &b, 1, TCP_WRITE_FLAG_COPY) == ERR_OK) {
+  bool wrote = false;
+  while (midiOutTail != midiOutHead) {
+    uint16_t sndbuf = tcp_sndbuf(midiNetPcb);
+    if (sndbuf == 0) break;  // send buffer full — retry next poll
+    uint16_t contig = (midiOutHead > midiOutTail)
+                          ? (uint16_t)(midiOutHead - midiOutTail)
+                          : (uint16_t)(MIDI_OUT_QUEUE_SIZE - midiOutTail);
+    uint16_t n = (contig < sndbuf) ? contig : sndbuf;
+    if (tcp_write(midiNetPcb, &midiOutQueue[midiOutTail], n,
+                  TCP_WRITE_FLAG_COPY) != ERR_OK) {
+      break;  // couldn't enqueue — retry next poll
+    }
+    midiOutTail = (uint16_t)((midiOutTail + n) & (MIDI_OUT_QUEUE_SIZE - 1));
+    wrote = true;
+  }
+  if (wrote) {
     tcp_output(midiNetPcb);
+    midiOutLastDrain = get_absolute_time();  // TCP is accepting — healthy
+  }
+}
+
+// Drop pending bytes whose consumer/link has stalled past MIDI_QUEUE_STALE_MS —
+// they're stale and replaying them desyncs the ring. Poll context only.
+static void midi_queue_cleanup(void) {
+  absolute_time_t now = get_absolute_time();
+  if (midiInHead != midiInTail &&
+      absolute_time_diff_us(midiInLastDrain, now) > MIDI_QUEUE_STALE_MS * 1000) {
+    uint16_t dropped =
+        (uint16_t)((midiInHead - midiInTail) & (MIDI_IN_QUEUE_SIZE - 1));
+    midiInTail = midiInHead;
+    midi_in_publish();  // Bconstat now reports "no byte"
+    midiInLastDrain = now;
+    DPRINTF("MIDI IN stale: flushed %u byte(s)\n", dropped);
+  }
+  if (midiOutHead != midiOutTail &&
+      absolute_time_diff_us(midiOutLastDrain, now) >
+          MIDI_QUEUE_STALE_MS * 1000) {
+    uint16_t dropped =
+        (uint16_t)((midiOutHead - midiOutTail) & (MIDI_OUT_QUEUE_SIZE - 1));
+    midiOutTail = midiOutHead;
+    midiOutLastDrain = now;
+    DPRINTF("MIDI OUT stale: flushed %u byte(s)\n", dropped);
   }
 }
 
@@ -217,17 +320,28 @@ static void midi_net_update_led(void) {
 // the backoff resets on a successful connect.
 void midi_net_poll(void) {
   midi_net_update_led();
-  // DEBUG: once/sec, print the command rate (= bytes/sec each way).
+  midi_net_flush_out();   // drain queued OUT bytes to the orchestrator
+  midi_queue_cleanup();   // drop stale pending bytes if a side has stalled
+#if 0  // per-second MIDI/s rate trace — re-enable to instrument throughput
   static absolute_time_t cmdStatAt = {0};
-  static uint32_t lastSend = 0, lastRecv = 0;
+  static uint32_t lastSend = 0, lastRecv = 0, lastRx = 0, lastSamples = 0;
   if (absolute_time_diff_us(get_absolute_time(), cmdStatAt) <= 0) {
-    DPRINTF("MIDI cmd/s: SEND=%lu RECV=%lu\n",
-            (unsigned long)(midiCmdSend - lastSend),
-            (unsigned long)(midiCmdRecv - lastRecv));
+    uint32_t samples = commemul_samplesWritten();
+    DPRINTF(
+        "MIDI/s: OUT=%lu RX=%lu IN_adv=%lu active=%d cap/s=%lu ringdepth=%lu "
+        "outdrop=%lu\n",
+        (unsigned long)(midiCmdSend - lastSend),
+        (unsigned long)(midiNetRx - lastRx),
+        (unsigned long)(midiCmdRecv - lastRecv), (int)midiActive,
+        (unsigned long)(samples - lastSamples),
+        (unsigned long)commemul_ringDepth(), (unsigned long)midiOutDrop);
     lastSend = midiCmdSend;
     lastRecv = midiCmdRecv;
+    lastRx = midiNetRx;
+    lastSamples = samples;
     cmdStatAt = make_timeout_time_ms(1000);
   }
+#endif
   if (!midiEnabled) {
     return;  // STORY-01: orchestrator connection disabled in config
   }
@@ -284,6 +398,45 @@ void midi_net_ping(char *buf, size_t len) {
 // Called from chandler_loop for every parsed command (kept in RAM — hot
 // path). chandler has already advanced payloadPtr past the random token,
 // so payloadPtr points at the first parameter (d3).
+// EPIC-09 fast-path: once the firmware is live, MIDI OUT bytes arrive as raw
+// commemul samples (one ROM3 read per byte) instead of CMD_MIDI_SEND frames.
+// midiActive gates the routing so the boot-menu/config command frames still
+// reach the TPROTOCOL parser (their payload words can have bit 8 set too).
+// Committed RP-side at firmware launch (cmdFirmware), like md-devops's
+// emul_enterFirmwareMode — set BEFORE the ST starts emitting MIDI, with no
+// dependency on a round-trip command.
+void midi_set_active(bool active) { midiActive = active; }
+
+static bool __not_in_flash_func(midi_rom3_consumer)(uint16_t addr_lsb) {
+  if (!midiActive) {
+    return false;  // config phase — let TPROTOCOL parse the sample
+  }
+  if (addr_lsb & MIDI_DEACTIVATE) {  // bit 10: ST warm-reset — drop the gate so
+    midiActive = false;              // the re-install's command frame works
+    return true;
+  }
+  if (addr_lsb & MIDI_IN_ADVANCE) {  // bit 9: IN consume — pop the ring head
+    if (midiInTail != midiInHead) {
+      midiInTail = (uint16_t)((midiInTail + 1) & (MIDI_IN_QUEUE_SIZE - 1));
+    }
+    midiInLastDrain = get_absolute_time();  // the m68k is consuming — healthy
+    midi_in_publish();  // republish the new head byte + status
+    // Ack the advance: the m68k's Bconin blocks on this until we've popped +
+    // republished, so a stale MIDI_IN_STATUS can't be re-read (IN_adv >> RX).
+    midiInAck++;
+    WRITE_AND_SWAP_LONGWORD((unsigned int)&__rom_in_ram_start__,
+                            MIDI_IN_ACK_OFFSET, midiInAck);
+    midiCmdRecv++;  // DEBUG: IN advances/s
+    return true;
+  }
+  if (addr_lsb & MIDI_OUT_MARKER) {  // bit 8: a fire-and-forget OUT byte
+    midi_net_send_byte((uint8_t)(addr_lsb & 0xFFu));
+    midiCmdSend++;  // DEBUG: OUT bytes/s
+    return true;
+  }
+  return false;
+}
+
 static void __not_in_flash_func(midi_command_cb)(TransmissionProtocol *protocol,
                                                  uint16_t *payloadPtr) {
   // Only handle commands in the MIDI app namespace; the terminal commands
@@ -306,33 +459,9 @@ static void __not_in_flash_func(midi_command_cb)(TransmissionProtocol *protocol,
                               oldVector);
       DPRINTF("MIDI: saved value %08X into ROM field offset %04X\n", oldVector,
               offset);
-      break;
-    }
-    case CMD_MIDI_SEND: {
-      // m68k shipped an OUT byte — send it to the orchestrator. (Was the
-      // EPIC-02 local echo; the echo now lives at the network peer.)
-      uint32_t b =
-          TPROTO_GET_PAYLOAD_PARAM32(payloadPtr);  // d3, byte in low 8 bits
-      midi_net_send_byte((uint8_t)(b & 0xFFu));
-      midiCmdSend++;  // DEBUG
-      break;
-    }
-    case CMD_MIDI_RECV: {
-      midiCmdRecv++;  // DEBUG
-      // Bconin(3): pop ONE byte (if any) into the shared byte slot, in the low
-      // 8 bits of the longword the m68k reads. Bconstat reads the depth (kept
-      // current by midi_publish_depth). The m68k spins on the depth before
-      // issuing this, so a byte is normally present.
-      uint8_t b = 0;
-      if (midiInTail != midiInHead) {
-        b = midiInQueue[midiInTail];
-        midiInTail = (uint16_t)((midiInTail + 1) & (MIDI_IN_QUEUE_SIZE - 1));
-      }
-      // Write b into all four bytes (raw, no swap) so the m68k reads it whatever
-      // byte/endianness it picks up — rules out a read-side byte-order bug.
-      WRITE_LONGWORD_RAW((unsigned int)&__rom_in_ram_start__,
-                         MIDI_IN_BUFFER_OFFSET, (uint32_t)b * 0x01010101u);
-      midi_publish_depth();
+      // This runs at BOOT now (main.s install_midi_hook), while the config menu
+      // still needs the command channel — so do NOT gate or tear down here.
+      // midiActive + chandler_clearCB happen at firmware launch (cmdFirmware).
       break;
     }
     default:
@@ -371,17 +500,23 @@ void midi_net_reload(void) {
   midi_load_config();
   midi_net_reset();  // close any live pcb -> MIDI_NET_DOWN, flush the IN queue
   midiNetBackoffMs = MIDI_NET_BACKOFF_MIN_MS;
-  midiNetNextAttemptValid = false;  // let midi_net_poll connect on the next tick
+  midiNetNextAttemptValid =
+      false;  // let midi_net_poll connect on the next tick
 }
 
 void midi_init(void) {
-  // Load the orchestrator endpoint config (EPIC-06 STORY-01). aconfig_init() ran
-  // in main() before emul_start(), so the context is populated.
+  // Load the orchestrator endpoint config (EPIC-06 STORY-01). aconfig_init()
+  // ran in main() before emul_start(), so the context is populated.
   midi_load_config();
 
-  // No pending MIDI-IN bytes at boot. The RP owns this field in the served ROM
-  // image; the m68k only ever reads it (CMD_MIDI_RECV).
+  // No byte ready at boot (Bconstat status = 0). The RP owns these fields in
+  // the served ROM image; the m68k only ever reads them.
   WRITE_AND_SWAP_LONGWORD((unsigned int)&__rom_in_ram_start__,
-                          MIDI_IN_COUNT_OFFSET, 0);
+                          MIDI_IN_STATUS_OFFSET, 0);
+  WRITE_AND_SWAP_LONGWORD((unsigned int)&__rom_in_ram_start__,
+                          MIDI_IN_ACK_OFFSET, 0);
+  midiInLastDrain = get_absolute_time();
+  midiOutLastDrain = get_absolute_time();
   chandler_addCB(midi_command_cb);
+  chandler_setRawConsumer(midi_rom3_consumer);  // EPIC-09 fast-path OUT stream
 }
