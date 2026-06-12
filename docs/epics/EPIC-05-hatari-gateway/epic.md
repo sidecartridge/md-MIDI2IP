@@ -10,12 +10,12 @@ status: done
 A **software RP2040** for the [Hatari](https://www.hatari-emu.org/) emulator.
 Hatari can route the Atari's raw MIDI to/from files; this gateway bridges those
 files to the **orchestrator** (EPIC-04), so **MIDI Maze running in Hatari becomes a
-virtual player** — no hardware needed. Lives in its own folder `hatari-gateway/`,
+virtual player** (no hardware needed). Lives in its own folder `hatari-gateway/`,
 **Python 3 standard library only** (no third-party packages).
 
 This is the project's **test peer**: it replaces the old "desktop test peer"
 idea. A Hatari instance + this gateway is indistinguishable, to the orchestrator,
-from a real ST + RP2040 — so you can play/validate the whole stack on a laptop,
+from a real ST + RP2040. You can play/validate the whole stack on a laptop,
 and a single real ST can finally get a second node to start a match (D-09).
 
 ## Scope
@@ -30,8 +30,8 @@ and a single real ST can finally get a second node to start a match (D-09).
 
 The `--midi-in` / `--midi-out` file flags enable MIDI on their own (no separate
 `--midi` flag in Hatari 2.6.1):
-- `--midi-out <file>` — Hatari **writes** the Atari's MIDI **OUT** here (Atari → host).
-- `--midi-in <file>` — Hatari **reads** the Atari's MIDI **IN** from here (host → Atari).
+- `--midi-out <file>`: Hatari **writes** the Atari's MIDI **OUT** here (Atari → host).
+- `--midi-in <file>`: Hatari **reads** the Atari's MIDI **IN** from here (host → Atari).
 
 For real-time we use two **named pipes (FIFOs)**: the gateway reads the OUT fifo
 (`midi_out.fifo`, Hatari's `--midi-out`) and writes the IN fifo (`midi_in.fifo`,
@@ -39,10 +39,10 @@ Hatari's `--midi-in`) continuously.
 
 ## Stories
 
-- STORY-01 — FIFO setup + documented Hatari invocation
-- STORY-02 — Bridge core (OUT fifo → orchestrator; orchestrator → IN fifo)
-- STORY-03 — Orchestrator client (connect, reconnect/backoff, status)
-- STORY-04 — Validate: Hatari MIDI Maze joins the ring as a player
+- STORY-01: FIFO setup + documented Hatari invocation
+- STORY-02: Bridge core (OUT fifo → orchestrator; orchestrator → IN fifo)
+- STORY-03: Orchestrator client (connect, reconnect/backoff, status)
+- STORY-04: Validate: Hatari MIDI Maze joins the ring as a player
 
 ## Notes
 
@@ -51,12 +51,12 @@ side, the IN fifo is the `CMD_MIDI_RECV` / Bconin side, and the orchestrator cli
 mirrors `midi_net_*`. Stdlib-only and FIFO-based keeps it portable and trivially
 runnable next to Hatari.
 
-## Outcome (Iteration 1) — complete
+## Outcome (Iteration 1): complete
 
 The gateway **works end to end**: a full MIDI Maze match plays through the
-orchestrator with the Hatari gateway as a player, so all four stories are done
-(FIFO setup, bridge core, orchestrator client, and full-match validation). This
-closes the D-09 gap purely in software — no hardware needed.
+orchestrator with the Hatari gateway as a player. All four stories are done:
+FIFO setup, bridge core, orchestrator client, and full-match validation. This
+closes the D-09 gap purely in software (no hardware needed).
 
 Note: the gateway is a pure-software peer (FIFO ↔ TCP), so it does **not** hit the
 RP-hardware throughput ceiling (**D-12**); that ceiling is on the m68k↔RP command

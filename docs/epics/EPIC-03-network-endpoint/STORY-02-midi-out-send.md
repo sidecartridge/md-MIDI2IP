@@ -15,7 +15,7 @@ it reaches the orchestrator with low added latency.
 ## Tasks
 
 - [x] On `CMD_MIDI_SEND`, `tcp_write` the byte to the socket (was the IN-queue echo) via `midi_net_send_byte`
-- [x] Forward bytes verbatim — no MIDI parsing/filtering/framing (D-02)
+- [x] Forward bytes verbatim; no MIDI parsing/filtering/framing (D-02)
 - [x] Flush immediately with `tcp_output` (TCP_NODELAY) for lowest latency (C-01)
 - [x] Send-failure handling decided: drop on a full TCP buffer (sufficient at handshake rate); gameplay-rate queue+retry on `tcp_sent` is out of scope here, tracked in EPIC-07 (throughput tuning)
 
@@ -31,5 +31,5 @@ network round-trip.
 ## Notes
 
 `CMD_MIDI_SEND` is the exact echo seam from EPIC-02 STORY-03. The stream is opaque
-bytes (D-02) — never reorder or drop. MIDI Maze is latency-sensitive (C-01):
+bytes (D-02): never reorder or drop. MIDI Maze is latency-sensitive (C-01);
 coalesce only within a few ms.

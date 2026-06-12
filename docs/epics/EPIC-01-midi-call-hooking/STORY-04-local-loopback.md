@@ -1,7 +1,7 @@
 ---
 id: STORY-04
 epic: EPIC-01
-title: Local loopback — solo MIDI Maze (ring of one)
+title: Local loopback: solo MIDI Maze (ring of one)
 status: done
 milestone: alpha-mvp
 ---
@@ -9,8 +9,8 @@ milestone: alpha-mvp
 ## Goal
 
 Wire the capture (STORY-02) to the injection (STORY-03) so the ST receives its
-own MIDI output — a "ring of one." MIDI Maze sends `0x00`, reads its own `0x00`
-back, becomes MASTER, and is playable solo against drones on a single machine
+own MIDI output (a "ring of one"). MIDI Maze sends `0x00`, reads its own `0x00`
+back, becomes MASTER, and is then playable solo against drones on a single machine
 with **no MIDI cable and no second ST**. This is the self-contained EPIC-01
 deliverable; it proves the whole m68k hook → capture → inject → read path that
 EPIC-02/03 later route through the RP and the network.
@@ -26,12 +26,12 @@ EPIC-02/03 later route through the RP and the network.
 
 On a single ST with the cartridge and no peers, MIDI Maze becomes MASTER and
 reaches the config screen, proving the local loopback delivers its own MIDI back.
-Confirmed on hardware. (It does **not** start a match — MIDI Maze waits for a
+Confirmed on hardware. (It does **not** start a match: MIDI Maze waits for a
 SLAVE; that needs a 2nd node, D-09 / EPIC-03.)
 
 ## Notes
 
-Pure m68k — the echo never touches the RP, so there's no per-byte RP traffic
+Pure m68k: the echo never touches the RP, so there's no per-byte RP traffic
 (the serial console is silent during play; only the one-time install handshake
 logs). EPIC-02 replaces this local echo with an RP-side echo over shared-region
 rings; EPIC-03 replaces the RP echo with the network round-trip.

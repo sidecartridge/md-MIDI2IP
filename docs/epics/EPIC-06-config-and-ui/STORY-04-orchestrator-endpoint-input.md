@@ -9,7 +9,7 @@ status: done
 
 Let the user set the orchestrator endpoint from the device UI: one **input screen
 to enter the orchestrator host** (an IP address or a hostname) and another to
-enter the **port** — reusing md-drives-emulator's RTC **hostname** and **port**
+enter the **port**, reusing md-drives-emulator's RTC **hostname** and **port**
 input screens. Values persist in per-app config (STORY-01).
 
 ## Tasks
@@ -28,6 +28,6 @@ to per-app config and the RP connects to the new endpoint on the next attempt.
 ## Notes
 
 Direct reuse of md-drives-emulator's RTC config input screens (it sets an NTP/RTC
-hostname + port the same way) — the same field-entry widget and key handling. The
+hostname + port the same way), using the same field-entry widget and key handling. The
 host field accepts both a dotted IP and a DNS name (lwIP resolves it). Backed by
 STORY-01's config keys.

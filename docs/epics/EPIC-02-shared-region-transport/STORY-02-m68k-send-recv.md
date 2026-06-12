@@ -1,7 +1,7 @@
 ---
 id: STORY-02
 epic: EPIC-02
-title: m68k — ship OUT via CMD_MIDI_SEND; pull IN via CMD_MIDI_RECV → Bconin
+title: m68k: ship OUT via CMD_MIDI_SEND; pull IN via CMD_MIDI_RECV → Bconin
 status: done
 milestone: alpha-mvp
 ---
@@ -13,15 +13,15 @@ echo. The two directions are independent.
 
 ## Tasks
 
-- [x] OUT: the `Bconout(3)` hook ships the captured byte via `send_sync CMD_MIDI_SEND`, then chains and returns — no readback
+- [x] OUT: the `Bconout(3)` hook ships the captured byte via `send_sync CMD_MIDI_SEND`, then chains and returns (no readback)
 - [x] IN: issue `CMD_MIDI_RECV`, read `MIDI_IN_COUNT` + copy `MIDI_IN_BUFFER`, and deliver those bytes via `Bconin`/`Bconstat`
-- [x] Pick the IN-pull cadence — the vsync `check_commands` loop and/or the `Bconstat(3)` path — so injected bytes appear promptly without flooding the command channel
+- [x] Pick the IN-pull cadence (the vsync `check_commands` loop and/or the `Bconstat(3)` path) so injected bytes appear promptly without flooding the command channel
 - [x] Remove the EPIC-01 local echo
 
 ## Acceptance
 
 With the RP echo (STORY-03), the local echo is gone yet solo MIDI Maze still
-becomes MASTER and plays — bytes leave via `CMD_MIDI_SEND` and arrive via
+becomes MASTER and plays: bytes leave via `CMD_MIDI_SEND` and arrive via
 `CMD_MIDI_RECV` → `Bconin`.
 
 ## Notes

@@ -1,15 +1,15 @@
 ---
 id: STORY-02
 epic: EPIC-10
-title: Validate — a full 2-player MIDI Maze match starts and plays
+title: Validate: a full 2-player MIDI Maze match starts and plays
 status: done
 milestone: alpha-mvp
 ---
 
 ## Goal
 
-The payoff: two players actually **play a MIDI Maze match over IP**, end to end —
-ST+RP and a second node through the orchestrator.
+The payoff: two players actually **play a MIDI Maze match over IP**, end to end.
+ST+RP and a second node connect through the orchestrator.
 
 ## Tasks
 
@@ -21,7 +21,7 @@ ST+RP and a second node through the orchestrator.
 ## Acceptance
 
 Two players start and play a MIDI Maze match over the orchestrator, responsive enough
-to play (C-01). **Met** — confirmed on real hardware: "it works and it is playable."
+to play (C-01). **Met**, confirmed on real hardware: "it works and it is playable."
 
 ## Notes
 

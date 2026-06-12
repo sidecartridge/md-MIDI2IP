@@ -1,7 +1,7 @@
 ---
 id: STORY-02
 epic: EPIC-11
-title: Reconnection node recycling — supersede a stalled prior same-IP connection
+title: Reconnection node recycling: supersede a stalled prior same-IP connection
 status: done
 ---
 
@@ -9,7 +9,7 @@ status: done
 
 When a node reconnects from an IP that already has a connection, recycle its node
 number: if the prior connection is stalled (a dead/half-open node that never FIN'd),
-drop it and give the reconnection a fresh, incremented node id — so a reset node
+drop it and give the reconnection a fresh, incremented node id so a reset node
 rejoins cleanly instead of leaving a phantom.
 
 ## Tasks
@@ -30,6 +30,6 @@ assigned a new incremented node number; a still-active connection from an exempt
 Replaces the original "stale relay-buffer cleanup" scope: the relay forwards each
 chunk immediately (no per-node byte queue to age out), so the meaningful staleness is
 at the **connection** level. This extends the existing one-per-private-IP dedup
-(EPIC-04 STORY-04) — which always supersedes a private-IP node — to also drop a
+(EPIC-04 STORY-04, which always supersedes a private-IP node) to also drop a
 *stalled* prior connection for IP classes that are exempt from the strict dedup, so a
 reconnecting loopback/NAT node doesn't leave a phantom. `RECONNECT_STALE_S` is tunable.

@@ -1,7 +1,7 @@
 ---
 id: STORY-04
 epic: EPIC-05
-title: Validate — Hatari MIDI Maze joins the ring as a player
+title: Validate: Hatari MIDI Maze joins the ring as a player
 status: done
 milestone: alpha-mvp
 ---
@@ -9,8 +9,8 @@ milestone: alpha-mvp
 ## Goal
 
 Prove the gateway end to end: MIDI Maze running in Hatari, bridged through the
-gateway to the orchestrator, behaves as a real player in the ring — and with a
-second player a match actually starts and plays.
+gateway to the orchestrator, behaves as a real player in the ring. With a
+second player, a match actually starts and plays.
 
 ## Tasks
 

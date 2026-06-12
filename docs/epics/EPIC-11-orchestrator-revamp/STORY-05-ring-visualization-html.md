@@ -29,4 +29,4 @@ no page reload.
 
 Self-contained and offline-friendly (served by the existing asyncio HTTP, no
 framework). The 2 s poll matches the per-node telemetry cadence (STORY-04). Pairs
-directly with STORY-04 — that story owns the data, this one owns the rendering.
+directly with STORY-04: that story owns the data, this one owns the rendering.

@@ -7,8 +7,8 @@ status: done
 
 ## Goal
 
-Give the device its own UI — a boot menu, on-screen input for the orchestrator
-endpoint, and a minimal live status — persist the config in per-app flash, and
+Give the device its own UI: a boot menu, on-screen input for the orchestrator
+endpoint, and a minimal live status. Persist the config in per-app flash, and
 strip the codebase down to only what MIDI-to-IP actually uses (the app started
 from the Sidecartridge template). Modelled on md-drives-emulator's menu/config UI.
 
@@ -24,11 +24,11 @@ from the Sidecartridge template). Modelled on md-drives-emulator's menu/config U
 
 ## Stories
 
-- STORY-01 — Per-app config keys for the MIDI endpoint
-- STORY-02 — Boot menu with countdown (E = firmware, X = Booster)
-- STORY-03 — Trim the template + remove the SD-card subsystem
-- STORY-04 — Input screens for the orchestrator endpoint (host/IP + port)
-- STORY-05 — Status screen — Wi-Fi + local IP + orchestrator connection
+- STORY-01: Per-app config keys for the MIDI endpoint
+- STORY-02: Boot menu with countdown (E = firmware, X = Booster)
+- STORY-03: Trim the template + remove the SD-card subsystem
+- STORY-04: Input screens for the orchestrator endpoint (host/IP + port)
+- STORY-05: Status screen (Wi-Fi + local IP + orchestrator connection)
 
 ## Notes
 

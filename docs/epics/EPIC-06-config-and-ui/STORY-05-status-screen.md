@@ -1,13 +1,13 @@
 ---
 id: STORY-05
 epic: EPIC-06
-title: Status screen — Wi-Fi + local IP + orchestrator connection only
+title: Status screen: Wi-Fi + local IP + orchestrator connection only
 status: done
 ---
 
 ## Goal
 
-Strip the on-screen status down to only what matters at a glance — remove the
+Strip the on-screen status down to only what matters at a glance: remove the
 other parameters currently shown and display just **Wi-Fi status**, the device's
 **local IP address**, and the **orchestrator connection status**.
 
@@ -16,13 +16,13 @@ other parameters currently shown and display just **Wi-Fi status**, the device's
 - [x] Remove the extra parameters from the status/menu screen, keeping only the three below
 - [x] Show **Wi-Fi status** (down / associating / IP-acquired)
 - [x] Show the device's **local IP address** (`network_getCurrentIp`)
-- [x] Show the **orchestrator connection status** (down / connecting / up — from the `midi_net_*` state machine, `midi_net_status_str`)
+- [x] Show the **orchestrator connection status** (down / connecting / up, from the `midi_net_*` state machine via `midi_net_status_str`)
 - [x] Render on both the Atari framebuffer and local OLED paths, refreshing live
 
 ## Acceptance
 
 The status screen shows only Wi-Fi status, the local IP, and the orchestrator
-connection state — all updating live — and nothing else.
+connection state, all updating live, and nothing else.
 
 ## Notes
 

@@ -13,7 +13,7 @@ them.
 
 ## Tasks
 
-- [x] Define the target as per-hop latency ≤ physical MIDI ring-speed-per-hop (~hundreds of µs at 31250 baud + per-machine processing) — we intercept before the ACIA, so this should be achievable or better on a LAN (C-01)
+- [x] Define the target as per-hop latency ≤ physical MIDI ring-speed-per-hop (~hundreds of µs at 31250 baud + per-machine processing); interception before the ACIA means this should be achievable or better on a LAN (C-01)
 - [x] Measure per-hop round-trip latency (write → orchestrator → readback) for single events
 - [x] Measure sustained throughput for the per-frame state burst and confirm the resulting FPS vs original
 - [x] Tune ring sizes and send coalescing to hit targets; record results
