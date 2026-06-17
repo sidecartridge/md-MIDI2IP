@@ -17,7 +17,9 @@ Stdlib only. Exit code 0 = PASS, 1 = FAIL.
 
 Usage:  python3 orchestrator/selftest.py
 """
+import base64
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -25,6 +27,9 @@ import time
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # import the local ws codec
+import ws  # noqa: E402
 
 HOST = "127.0.0.1"
 _failures: "list[str]" = []
@@ -100,6 +105,49 @@ def server(port: int, http_port: int, *extra: str):
             proc.kill()
 
 
+def ws_connect(port: int) -> "tuple[socket.socket, bool]":
+    """Open a TCP socket and run the RFC 6455 client handshake. Returns the socket
+    and whether the server answered 101 with the right Sec-WebSocket-Accept."""
+    s = socket.create_connection((HOST, port))
+    s.settimeout(2.0)
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    s.sendall(
+        f"GET / HTTP/1.1\r\nHost: {HOST}:{port}\r\nUpgrade: websocket\r\n"
+        f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+        f"Sec-WebSocket-Version: 13\r\n\r\n".encode("latin-1")
+    )
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = s.recv(1024)
+        if not chunk:
+            break
+        buf += chunk
+    ok = b" 101 " in buf and ws.accept_key(key).encode("ascii") in buf
+    return s, ok
+
+
+def ws_send(s: socket.socket, data: bytes) -> None:
+    """Send data as a masked binary frame (client-to-server frames must be masked)."""
+    s.sendall(ws.binary_frame(data, mask_key=os.urandom(4)))
+
+
+def ws_recv(s: socket.socket, dec: "ws.FrameDecoder", n: int, timeout: float = 2.0) -> bytes:
+    """Read until at least n application bytes have been decoded from server frames."""
+    s.settimeout(timeout)
+    out = bytearray()
+    try:
+        while len(out) < n:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            for opcode, payload in dec.feed(chunk):
+                if opcode in (ws.OP_BINARY, ws.OP_CONT):
+                    out.extend(payload)
+    except (socket.timeout, OSError):
+        pass
+    return bytes(out)
+
+
 def main() -> int:
     # Phase A — ring relay + status + drop/reconnect. Both clients are on
     # 127.0.0.1 (loopback is exempt from the per-IP dedup, so they coexist).
@@ -158,7 +206,7 @@ def main() -> int:
     # Reconnection supersede (EPIC-11 STORY-02): a prior same-IP connection that
     # has gone quiet past RECONNECT_STALE_S is stalled, so a reconnection drops it
     # and the new connection takes a fresh, incremented node id.
-    p = orch.Player(id=9, peer="x:1", ip="x", writer=None, connected_at=0.0, last_active=100.0)
+    p = orch.Player(id=9, peer="x:1", ip="x", conn=None, connected_at=0.0, last_active=100.0)
     check("fresh node not stalled", orch._is_stalled(p, 105.0) is False)
     check("quiet node stalled past threshold",
           orch._is_stalled(p, 100.0 + orch.RECONNECT_STALE_S + 1) is True)
@@ -178,8 +226,6 @@ def main() -> int:
     # isolation before it is wired into the listener (STORY-03).
     print("websocket codec (RFC 6455, stdlib):")
     import ast
-
-    import ws
 
     # Handshake accept value: the canonical RFC 6455 4.2.2 example vector.
     check("Sec-WebSocket-Accept matches the RFC vector",
@@ -228,11 +274,34 @@ def main() -> int:
     check("ws.py is stdlib-only (hashlib/base64/struct)",
           imported <= {"hashlib", "base64", "struct"})
 
+    # Phase E — a mixed ring (EPIC-13 STORY-03): with --ws, a TCP player and a
+    # WebSocket player join one ring and relay to each other byte-exact.
+    with server(5097, 8097, "--ws", "--ws-port", "5096"):
+        print("mixed ring (TCP + WebSocket):")
+        t = conn(5097)  # TCP player joins first -> ring order [t, w]
+        w, ok = ws_connect(5096)  # WebSocket player second
+        check("ws handshake completed (101 + accept)", ok)
+        wdec = ws.FrameDecoder()
+        time.sleep(0.3)
+
+        st = status(8097)
+        check("2 players online (tcp + ws)", st["players_online"] == 2)
+        check("status reports transport per node",
+              sorted(p.get("transport") for p in st["players"]) == ["tcp", "ws"])
+
+        t.sendall(b"\x00\x84\x10")  # t's OUT -> w's IN (t -> next is w)
+        check("TCP node OUT relays to WebSocket node IN",
+              ws_recv(w, wdec, 3) == b"\x00\x84\x10")
+        ws_send(w, b"\x99\x42")  # w's OUT -> t's IN (w is last, wraps to t)
+        check("WebSocket node OUT relays to TCP node IN", recv_exact(t, 2) == b"\x99\x42")
+        t.close()
+        w.close()
+
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")
         return 1
-    print("PASS: orchestrator relay + IP-dedup + --inspect decoder + ws codec")
+    print("PASS: orchestrator relay + IP-dedup + --inspect decoder + ws codec + mixed ring")
     return 0
 
 
