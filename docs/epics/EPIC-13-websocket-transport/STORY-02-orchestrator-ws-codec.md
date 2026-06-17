@@ -2,7 +2,7 @@
 id: STORY-02
 epic: EPIC-13
 title: Orchestrator stdlib WebSocket handshake and frame codec
-status: todo
+status: done
 ---
 
 ## Goal
@@ -13,11 +13,11 @@ packages.
 
 ## Tasks
 
-- [ ] Implement the server handshake: parse the GET request line and headers, compute `Sec-WebSocket-Accept` as base64(sha1(key + RFC6455 GUID)), and return the 101 Switching Protocols response (`hashlib` + `base64`, stdlib)
-- [ ] Implement a streaming frame decoder that reassembles frames split across TCP reads, unmasks client payloads, handles the binary / continuation / ping / pong / close opcodes, and yields payload bytes in order
-- [ ] Implement a frame encoder for server-to-client binary frames (unmasked) plus a pong and a close responder
-- [ ] Add selftest coverage: a known-vector handshake accept value, an encode then decode round-trip, a masked client frame decoded correctly, and one frame split across two reads reassembled correctly
-- [ ] Keep it stdlib only: assert no import beyond `hashlib`, `base64`, `struct` is added
+- [x] Implement the server handshake: parse the GET request line and headers, compute `Sec-WebSocket-Accept` as base64(sha1(key + RFC6455 GUID)), and return the 101 Switching Protocols response (`hashlib` + `base64`, stdlib)
+- [x] Implement a streaming frame decoder that reassembles frames split across TCP reads, unmasks client payloads, handles the binary / continuation / ping / pong / close opcodes, and yields payload bytes in order
+- [x] Implement a frame encoder for server-to-client binary frames (unmasked) plus a pong and a close responder
+- [x] Add selftest coverage: a known-vector handshake accept value, an encode then decode round-trip, a masked client frame decoded correctly, and one frame split across two reads reassembled correctly
+- [x] Keep it stdlib only: assert no import beyond `hashlib`, `base64`, `struct` is added
 
 ## Acceptance
 

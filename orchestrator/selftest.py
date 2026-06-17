@@ -10,6 +10,8 @@ Spawns orchestrator.py on test ports and validates it end to end:
   Phase C (--inspect decoder): the read-only MidiMazeInspector decodes a protocol
     byte stream into event labels (the only protocol awareness left after the
     relay went back to dumb — EPIC-11 STORY-01).
+  Phase D (websocket codec): the stdlib RFC 6455 handshake + frame codec (ws.py),
+    unit-tested in isolation before it is wired into the listener (EPIC-13 STORY-03).
 
 Stdlib only. Exit code 0 = PASS, 1 = FAIL.
 
@@ -172,11 +174,65 @@ def main() -> int:
     check("0x82 -> TERMINATE-GAME", insp.feed(b"\x82") == ["TERMINATE-GAME"])
     check("0x86 -> NAME-DIALOG", insp.feed(b"\x86") == ["NAME-DIALOG"])
 
+    # Phase D — the stdlib RFC 6455 codec (EPIC-13 STORY-02), unit-tested in
+    # isolation before it is wired into the listener (STORY-03).
+    print("websocket codec (RFC 6455, stdlib):")
+    import ast
+
+    import ws
+
+    # Handshake accept value: the canonical RFC 6455 4.2.2 example vector.
+    check("Sec-WebSocket-Accept matches the RFC vector",
+          ws.accept_key("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+    resp = ws.handshake_response("dGhlIHNhbXBsZSBub25jZQ==")
+    check("101 response carries the accept header",
+          b"HTTP/1.1 101" in resp and b"s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" in resp)
+    check("is_upgrade detects a websocket request",
+          ws.is_upgrade({"upgrade": "websocket", "connection": "keep-alive, Upgrade"}) is True)
+
+    # Encode (server, unmasked) -> decode round-trip; 200 bytes exercises the 16-bit length.
+    payload = bytes(range(200))
+    check("server binary frame round-trips",
+          ws.FrameDecoder().feed(ws.binary_frame(payload)) == [(ws.OP_BINARY, payload)])
+
+    # A client-to-server frame is masked; it must decode to the plaintext.
+    masked = ws.binary_frame(b"\x00\x80\x01", mask_key=b"\x37\xfa\x21\x3d")
+    check("masked client frame: mask bit set", (masked[1] & 0x80) != 0)
+    check("masked client frame decodes to plaintext",
+          ws.FrameDecoder().feed(masked) == [(ws.OP_BINARY, b"\x00\x80\x01")])
+
+    # A frame split across two feeds reassembles (TCP can split anywhere).
+    wire = ws.binary_frame(b"maze-bytes")
+    dec = ws.FrameDecoder()
+    check("partial feed yields nothing yet", dec.feed(wire[:3]) == [])
+    check("remainder completes the frame", dec.feed(wire[3:]) == [(ws.OP_BINARY, b"maze-bytes")])
+
+    # Two frames in one read both come out, in order.
+    check("two frames in one read decode in order",
+          ws.FrameDecoder().feed(ws.binary_frame(b"AA") + ws.binary_frame(b"BB"))
+          == [(ws.OP_BINARY, b"AA"), (ws.OP_BINARY, b"BB")])
+
+    # Control frames carry the right opcodes.
+    check("pong frame has the pong opcode", (ws.pong_frame(b"hi")[0] & 0x0F) == ws.OP_PONG)
+    check("close frame has the close opcode", (ws.close_frame()[0] & 0x0F) == ws.OP_CLOSE)
+
+    # Stdlib-only guard: ws.py imports nothing beyond hashlib, base64, struct.
+    ws_src = (Path(__file__).resolve().parent / "ws.py").read_text()
+    imported = set()
+    for node in ast.walk(ast.parse(ws_src)):
+        if isinstance(node, ast.Import):
+            imported.update(n.name.split(".")[0] for n in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    imported.discard("__future__")
+    check("ws.py is stdlib-only (hashlib/base64/struct)",
+          imported <= {"hashlib", "base64", "struct"})
+
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")
         return 1
-    print("PASS — orchestrator dumb relay + IP-dedup + --inspect decoder")
+    print("PASS: orchestrator relay + IP-dedup + --inspect decoder + ws codec")
     return 0
 
 
