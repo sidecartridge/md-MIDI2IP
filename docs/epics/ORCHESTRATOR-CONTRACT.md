@@ -7,7 +7,8 @@ the two sides: the wire format and the ring semantics the firmware (EPIC-03)
 depends on and the server (EPIC-04) implements.
 
 It captures decisions D-02 (raw bytes), D-03 (TCP), D-04 (ring topology),
-D-08 (raw sockets, no host MIDI), and constraint C-01 (lock-step latency).
+D-08 (raw sockets, no host MIDI), D-13 (optional WebSocket transport), and
+constraint C-01 (lock-step latency).
 
 ## The boundary
 
@@ -33,6 +34,44 @@ orchestrator. That connection is the entire interface:
 - **In-order, lossless, byte-exact**: TCP guarantees it; the orchestrator must not
   reorder, drop, dedupe, or coalesce in a way that changes byte order. A single
   lost/reordered byte desyncs the game.
+
+## Transport (TCP default, optional WebSocket)
+
+The carrier under the byte stream is selectable (D-13). The stream itself does not
+change: the same opaque, in-order, byte-exact bytes (D-02), whichever transport carries
+them.
+
+- **TCP (default).** Raw TCP with `TCP_NODELAY` (D-03), one connection per player. This
+  is the original path and stays the default on both ends.
+- **WebSocket (optional).** RFC 6455 over the same TCP connection, chosen per node and
+  enabled per orchestrator. A node carries its MIDI bytes in WebSocket binary frames,
+  and the orchestrator runs an extra WebSocket listener next to the TCP one. It exists so
+  a node can reach an orchestrator behind an HTTP reverse proxy or on a standard port,
+  where raw TCP on 5005 is blocked.
+
+Selection:
+
+- **Node (firmware or gateway):** a persisted transport setting, default `tcp`.
+- **Orchestrator:** a CLI parameter enables the WebSocket listener (default off, so an
+  existing deployment is unchanged). The TCP and WebSocket listeners run at the same time.
+
+WebSocket profile:
+
+- The client opens with a GET Upgrade handshake on a configurable path (default `/`); the
+  server replies `101` with the computed `Sec-WebSocket-Accept`.
+- MIDI bytes ride in **binary** frames. Framing is transport-level only, not MIDI parsing
+  (D-02 holds): a frame payload is an opaque run of the same bytes.
+- Client-to-server frames are masked (required by RFC 6455); server-to-client frames are
+  unmasked. A `ping` is answered with a `pong`; a `close` is handled by reconnect.
+
+Mixed ring: a TCP node and a WebSocket node register into the same ring and relay to each
+other. The relay is transport-agnostic, so ring order and the MIDI Maze protocol (master
+election, COUNT-PLAYERS) behave the same regardless of each node's carrier. Per-node
+telemetry records the transport.
+
+Not in scope: `wss` / TLS. The RP firmware has no mbedTLS linked (`lwipopts.h`
+`LWIP_ALTCP_TLS=0`), so a secure socket is a separate effort. Terminate TLS at a reverse
+proxy and speak `ws` to the orchestrator on the internal network.
 
 ## Ring semantics (orchestrator side)
 
