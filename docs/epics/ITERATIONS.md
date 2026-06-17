@@ -11,6 +11,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 2 | Transport redesign, HW re-validation + orchestrator revamp | done |
 | 3 | Hardware test pass: ST + Hatari verification checklist | in progress |
 | 4 | Optional WebSocket transport (TCP or WebSocket) | done |
+| 5 | Private rooms (room-key MIDI rings) | in progress |
 
 ---
 
@@ -121,3 +122,23 @@ transports play MIDI Maze on real hardware. One regression surfaced and was fixe
 disconnect-removal change that dropped a peer on a transient relay write error collapsed
 a 2-node ring into a self-echo flood, which slowed both carriers until it was reverted to
 the tolerant relay. `wss` / TLS stays deferred (the RP has no mbedTLS linked).
+
+---
+
+## Iteration 5: Private rooms
+
+**Goal:** split the single global ring into multiple private rings keyed by a human-typed
+room key, so groups of players get their own isolated MIDI Maze ring. A WebSocket node
+carries its room key in the handshake (`Authorization: Bearer`), the orchestrator routes it
+to that room's ring, and rooms are pre-provisioned by an operator through a small REST API
+(admin-key for writes) so an unknown key is refused. The web view gains a room selector. A
+plain-TCP node joins a default room, and the key gates a ring rather than securing traffic
+(no TLS; put it behind a reverse proxy if exposed).
+
+**Epics**
+
+| Epic | Status | Note |
+| --- | --- | --- |
+| EPIC-14 · Private rooms | todo | per-room rings + REST provisioning (admin-key), `Authorization: Bearer` room key on WS, room lifecycle (16-cap, auto-codes, TTL) + persistence, per-room phase/master + lobby page, firmware `[R]oom` menu + gateway `--room` |
+
+**Outcome:** pending.
