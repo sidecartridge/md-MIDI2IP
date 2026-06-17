@@ -429,7 +429,11 @@ async def handle_conn(conn: "Conn") -> None:
             except asyncio.TimeoutError:
                 _drop_player(target, "too slow (write backpressure)")
             except (ConnectionError, OSError):
-                pass  # target died; its own handler will deregister it
+                # The target's socket is broken (it disconnected, possibly
+                # half-open with no FIN, so its own reader is still blocked).
+                # Drop it now so it leaves the ring/status immediately instead of
+                # lingering until TCP keepalive notices.
+                _drop_player(target, "write failed (peer gone)")
     except (ConnectionError, OSError) as exc:
         LOG.info("player %d (%s) read error: %s", player.id, peer, exc)
     except Exception:  # one bad connection must never take down the server

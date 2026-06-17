@@ -294,8 +294,16 @@ def main() -> int:
               ws_recv(w, wdec, 3) == b"\x00\x84\x10")
         ws_send(w, b"\x99\x42")  # w's OUT -> t's IN (w is last, wraps to t)
         check("WebSocket node OUT relays to TCP node IN", recv_exact(t, 2) == b"\x99\x42")
-        t.close()
+
+        # A disconnect removes the node from the ring/status (not left displayed).
         w.close()
+        time.sleep(0.5)
+        st2 = status(8097)
+        check("WebSocket node removed on disconnect (1 online)",
+              st2["players_online"] == 1)
+        check("the node left in the ring is the TCP one",
+              len(st2["players"]) == 1 and st2["players"][0]["transport"] == "tcp")
+        t.close()
 
     print()
     if _failures:
