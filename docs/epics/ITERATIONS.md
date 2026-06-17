@@ -10,6 +10,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 1 | Architecture spike: build the full stack end to end | done |
 | 2 | Transport redesign, HW re-validation + orchestrator revamp | done |
 | 3 | Hardware test pass: ST + Hatari verification checklist | in progress |
+| 4 | Optional WebSocket transport (TCP or WebSocket) | in progress |
 
 ---
 
@@ -90,5 +91,24 @@ recovery cases.
 | Epic | Status | Note |
 | --- | --- | --- |
 | EPIC-12 · Hardware test pass (ST + Hatari) | todo | manual checklist: boot/config, ring join, full match, multi-node + recovery |
+
+**Outcome:** pending.
+
+---
+
+## Iteration 4: Optional WebSocket transport
+
+**Goal:** let a node reach the orchestrator over WebSocket instead of the raw TCP
+socket, chosen per node and enabled per orchestrator, without disturbing the default
+TCP path. Raw TCP on port 5005 is often blocked or unroutable through HTTP reverse
+proxies and cloud frontends; WebSocket rides a standard HTTP port and an Upgrade
+handshake. The MIDI byte stream stays opaque (D-02); WebSocket only wraps the carrier.
+TCP stays the default, and a TCP node and a WebSocket node can share one ring.
+
+**Epics**
+
+| Epic | Status | Note |
+| --- | --- | --- |
+| EPIC-13 · Optional WebSocket transport | todo | stdlib RFC 6455 on the orchestrator (mixed ring), a firmware WebSocket client + toggle, optional gateway parity; `wss` deferred |
 
 **Outcome:** pending.
