@@ -9,6 +9,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | --- | --- | --- |
 | 1 | Architecture spike: build the full stack end to end | done |
 | 2 | Transport redesign, HW re-validation + orchestrator revamp | done |
+| 3 | Hardware test pass: ST + Hatari verification checklist | in progress |
 
 ---
 
@@ -73,3 +74,21 @@ is validated by playable gameplay. EPIC-11 returned the orchestrator to a dumb r
 with real observability: a live SVG ring view polling per-node telemetry, reverse-DNS
 names, reconnection node recycling, and an end-user README usage guide. **Iteration
 complete.**
+
+---
+
+## Iteration 3: Hardware test pass
+
+**Goal:** turn the ad-hoc hardware validation from Iterations 1 and 2 into a standing,
+repeatable test checklist for each release, run on a physical Atari ST (Booster-installed
+firmware) and a Hatari node against one orchestrator. Cover the paths that were never
+exercised end to end: multi-node rings past two players, and the disconnect/reconnect
+recovery cases.
+
+**Epics**
+
+| Epic | Status | Note |
+| --- | --- | --- |
+| EPIC-12 · Hardware test pass (ST + Hatari) | todo | manual checklist: boot/config, ring join, full match, multi-node + recovery |
+
+**Outcome:** pending.
