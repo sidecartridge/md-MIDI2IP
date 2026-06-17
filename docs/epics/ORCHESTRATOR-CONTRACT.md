@@ -77,6 +77,56 @@ Not in scope: `wss` / TLS. The RP firmware has no mbedTLS linked (`lwipopts.h`
 `LWIP_ALTCP_TLS=0`), so a secure socket is a separate effort. Terminate TLS at a reverse
 proxy and speak `ws` to the orchestrator on the internal network.
 
+## Rooms (private rings)
+
+A room key splits the single ring into many private rings (D-14). Players that present the
+same key share one ring, isolated from other rooms. Rooms ride the WebSocket carrier; a
+plain-TCP node joins a single default room.
+
+Room key:
+
+- Human-typed and case-insensitive, normalized to uppercase. Characters `A-Z 0-9`, 1 to 16
+  long (fits the firmware config and is easy to type). An empty key means the default room.
+- Carried on the WebSocket handshake as `Authorization: Bearer <roomkey>` (D-13). A TCP
+  node has no handshake, so it always joins the default room.
+
+Provisioning (REST, on the HTTP status port):
+
+- `GET /rooms` (open): list rooms with a per-room summary (player count, cap, phase).
+- `POST /rooms` (admin): create a room. With a key it creates that named room; with no key
+  it returns a short auto-generated code (uppercase, ambiguous characters removed).
+- `DELETE /rooms/{key}` (admin): delete a room and close its players.
+- Admin writes require an `X-Admin-Key` header matching `--admin-key`, and are refused when
+  `--admin-key` is unset. Reads are open.
+- A WS join whose key is not provisioned is refused at the handshake (HTTP 403). The
+  default room is always present and needs no provisioning.
+
+Routing:
+
+- One ring per room. The relay forwards OUT(N) to IN(N+1) within a room only (D-04); a room
+  of one echoes to itself. Dedup and reconnection recycling stay within the room, and
+  telemetry is room-scoped.
+
+Lifecycle:
+
+- A room caps at 16 players (D-04, the MIDI Maze ring limit); an over-cap join is refused.
+- An empty non-default room is reaped after a TTL; the default room is never reaped.
+- The provisioned room set persists to a JSON file and reloads on restart. Player state is
+  not persisted; players reconnect into the room.
+
+Status and UI:
+
+- `GET /status.json?room=KEY` returns one room's snapshot in the per-node schema above; no
+  param means the default room.
+- The ring view has a room selector (from `/rooms`) and badges each room's phase and master
+  node. A lobby page lists all rooms with their counts and phase.
+- Phase and master come from the read-only `--inspect` decoder run per room, off the relay
+  path, so D-02 holds.
+
+Security: the room key gates a ring, it does not secure the traffic. Without TLS (`wss`
+deferred, D-13) the key and the MIDI bytes travel in clear text. Terminate TLS and guard
+the admin routes at a reverse proxy for an exposed deployment.
+
 ## Ring semantics (orchestrator side)
 
 The orchestrator emulates the MIDI Maze daisy-chain, where physically each
