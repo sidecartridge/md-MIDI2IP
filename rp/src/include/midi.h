@@ -51,6 +51,7 @@
 #define MIDI_CFG_ENABLED "MIDI_ENABLED"  // bool: connect to the orchestrator
 #define MIDI_DEFAULT_HOST "0.0.0.0"      // placeholder until set (STORY-04)
 #define MIDI_DEFAULT_PORT 5005
+#define MIDI_DEFAULT_WS_PATH "/"         // EPIC-13: WebSocket request path
 
 // Register the MIDI command handler with chandler and initialise the shared
 // IN count to 0. Call once during emul_start(), after chandler_init() and the

@@ -17,6 +17,7 @@
 
 #include <stdio.h>   // snprintf
 #include <stdlib.h>  // atoi
+#include <string.h>  // memcmp, strlen (WebSocket handshake)
 
 #include "aconfig.h"  // aconfig_getContext + settings_find_entry
 #include "blink.h"
@@ -27,6 +28,7 @@
 #include "lwip/ip_addr.h"
 #include "lwip/tcp.h"
 #include "memfunc.h"  // WRITE_AND_SWAP_LONGWORD
+#include "midi_ws.h"  // EPIC-13: WebSocket framing + handshake (RFC 6455)
 #include "network.h"  // network_getCurrentIp
 #include "pico/time.h"
 #include "tprotocol.h"  // TransmissionProtocol, TPROTO_* payload macros
@@ -81,6 +83,18 @@ static char midiNetHost[SETTINGS_MAX_VALUE_LENGTH] = MIDI_DEFAULT_HOST;
 static uint16_t midiNetPort = MIDI_DEFAULT_PORT;
 static bool midiEnabled = true;
 
+// EPIC-13 STORY-05: transport selection. Default TCP (D-13). STORY-06 wires the
+// MIDI_TRANSPORT config key + boot-menu toggle to flip this to WebSocket; the WS
+// code path below is gated on it, so a TCP install behaves exactly as before.
+typedef enum { MIDI_TX_TCP = 0, MIDI_TX_WS } midi_transport_t;
+static midi_transport_t midiTransport = MIDI_TX_TCP;
+static char midiWsPath[SETTINGS_MAX_VALUE_LENGTH] = MIDI_DEFAULT_WS_PATH;
+
+// WebSocket OUT framing scratch (poll context): one frame at a time, so a single
+// static buffer is reused by the OUT drain and the pong responder.
+#define MIDI_WS_TX_CHUNK 1024
+static uint8_t midiWsTx[MIDI_WS_TX_CHUNK + MIDI_WS_FRAME_OVERHEAD];
+
 static inline bool __not_in_flash_func(midi_in_push)(uint8_t b) {
   uint16_t next = (uint16_t)((midiInHead + 1) & (MIDI_IN_QUEUE_SIZE - 1));
   if (next == midiInTail) return false;  // full: drop
@@ -121,6 +135,7 @@ static inline void __not_in_flash_func(midi_in_publish)(void) {
 typedef enum {
   MIDI_NET_DOWN = 0,
   MIDI_NET_CONNECTING,
+  MIDI_NET_WS_HANDSHAKE,  // TCP up, GET Upgrade sent, awaiting 101 (WS only)
   MIDI_NET_UP,
 } midi_net_state_t;
 
@@ -156,6 +171,156 @@ static void midi_net_reset(void) {
   midiNetState = MIDI_NET_DOWN;
 }
 
+// --- EPIC-13 STORY-05: WebSocket client (gated by midiTransport == MIDI_TX_WS) ---
+// The MIDI byte stream is unchanged (D-02); WebSocket only wraps the carrier
+// (D-13). All of this runs in the lwIP poll / callback context (no locking).
+
+// xorshift32 for per-frame mask keys and the client nonce. Masking is an RFC 6455
+// requirement for client->server frames; it is not a security feature here, so a
+// cheap PRNG seeded from the timer is enough.
+static uint32_t midiWsRand = 0;
+static uint32_t midi_ws_next_rand(void) {
+  uint32_t x = midiWsRand;
+  if (x == 0) x = 0x2545F491u ^ time_us_32();
+  x ^= x << 13;
+  x ^= x >> 17;
+  x ^= x << 5;
+  midiWsRand = x;
+  return x;
+}
+
+static void midi_ws_mask_key(uint8_t key[4]) {
+  uint32_t r = midi_ws_next_rand();
+  key[0] = (uint8_t)r;
+  key[1] = (uint8_t)(r >> 8);
+  key[2] = (uint8_t)(r >> 16);
+  key[3] = (uint8_t)(r >> 24);
+}
+
+// WebSocket client runtime state.
+static char midiWsKey[32];           // base64 client nonce (24 chars) + NUL
+static midi_ws_decoder midiWsDec;    // streaming server->client frame decoder
+static uint8_t midiWsHsBuf[512];     // handshake (101) response accumulator
+static uint16_t midiWsHsLen = 0;
+
+static void midi_net_mark_up(void) {
+  midiNetState = MIDI_NET_UP;
+  midiNetBackoffMs = MIDI_NET_BACKOFF_MIN_MS;  // reset backoff on success
+  midiNetUpSince = get_absolute_time();
+}
+
+// Emit one masked client frame (poll/callback context). Used for the OUT drain
+// (binary) and the pong responder. Reuses the single midiWsTx scratch buffer.
+static void midi_ws_send_frame(uint8_t opcode, const uint8_t *payload,
+                               uint16_t len) {
+  if (midiNetPcb == NULL) return;
+  if (len > MIDI_WS_TX_CHUNK) len = MIDI_WS_TX_CHUNK;  // control payloads are tiny
+  uint8_t mask[4];
+  midi_ws_mask_key(mask);
+  size_t flen = midi_ws_build_frame(midiWsTx, opcode, payload, len, mask);
+  if (tcp_write(midiNetPcb, midiWsTx, (u16_t)flen, TCP_WRITE_FLAG_COPY) ==
+      ERR_OK) {
+    tcp_output(midiNetPcb);
+  }
+}
+
+// Decoder callbacks. Data frames carry MIDI IN bytes; control frames are tiny.
+static void midi_ws_on_data(const uint8_t *p, size_t len, void *ctx) {
+  (void)ctx;
+  for (size_t i = 0; i < len; i++) {
+    midi_in_push(p[i]);
+    midiNetRx++;  // DEBUG: orchestrator bytes arrived at the RP
+  }
+}
+
+static void midi_ws_on_ctl(uint8_t opcode, const uint8_t *p, size_t len,
+                           void *ctx) {
+  (void)ctx;
+  if (opcode == MIDI_WS_OP_PING) {
+    midi_ws_send_frame(MIDI_WS_OP_PONG, p, (uint16_t)len);
+  } else if (opcode == MIDI_WS_OP_CLOSE) {
+    midi_net_reset();  // server asked to close -> drop + reconnect (backoff)
+  }
+  // MIDI_WS_OP_PONG: nothing to do
+}
+
+// Substring search over a non-NUL-terminated byte buffer (the handshake header).
+static bool midi_ws_buf_contains(const uint8_t *hay, uint16_t haylen,
+                                 const char *needle) {
+  uint16_t nlen = (uint16_t)strlen(needle);
+  if (nlen == 0 || nlen > haylen) return false;
+  for (uint16_t i = 0; (uint16_t)(i + nlen) <= haylen; i++) {
+    if (memcmp(hay + i, needle, nlen) == 0) return true;
+  }
+  return false;
+}
+
+// Build and send the RFC 6455 client handshake; go to WS_HANDSHAKE awaiting 101.
+static void midi_ws_start_handshake(void) {
+  uint8_t nonce[16];
+  for (int i = 0; i < 16; i++) nonce[i] = (uint8_t)midi_ws_next_rand();
+  midi_ws_base64(nonce, sizeof(nonce), midiWsKey);
+  midi_ws_decoder_init(&midiWsDec);
+  midiWsHsLen = 0;
+  char req[320];
+  int n = snprintf(req, sizeof(req),
+                   "GET %s HTTP/1.1\r\n"
+                   "Host: %s:%u\r\n"
+                   "Upgrade: websocket\r\n"
+                   "Connection: Upgrade\r\n"
+                   "Sec-WebSocket-Key: %s\r\n"
+                   "Sec-WebSocket-Version: 13\r\n\r\n",
+                   midiWsPath, midiNetHost, (unsigned)midiNetPort, midiWsKey);
+  midiNetState = MIDI_NET_WS_HANDSHAKE;
+  if (n <= 0 || (size_t)n >= sizeof(req) ||
+      tcp_write(midiNetPcb, req, (u16_t)n, TCP_WRITE_FLAG_COPY) != ERR_OK) {
+    midi_net_reset();
+    return;
+  }
+  tcp_output(midiNetPcb);
+}
+
+// Feed the WS_HANDSHAKE accumulator; once the 101 response is complete, validate
+// it (status 101 + the expected Sec-WebSocket-Accept) and go UP, then decode any
+// frame bytes that trailed the header. Returns false on a bad/oversize response.
+static bool midi_ws_handshake_recv(struct pbuf *p) {
+  for (struct pbuf *q = p; q != NULL; q = q->next) {
+    const uint8_t *bytes = (const uint8_t *)q->payload;
+    for (uint16_t i = 0; i < q->len; i++) {
+      if (midiWsHsLen >= sizeof(midiWsHsBuf)) return false;  // header too large
+      midiWsHsBuf[midiWsHsLen++] = bytes[i];
+    }
+  }
+  int hdr_end = -1;
+  for (uint16_t i = 0; (uint16_t)(i + 4) <= midiWsHsLen; i++) {
+    if (midiWsHsBuf[i] == '\r' && midiWsHsBuf[i + 1] == '\n' &&
+        midiWsHsBuf[i + 2] == '\r' && midiWsHsBuf[i + 3] == '\n') {
+      hdr_end = i + 4;
+      break;
+    }
+  }
+  if (hdr_end < 0) return true;  // need more bytes; still waiting
+  char expect[32];
+  midi_ws_accept_key(midiWsKey, expect);
+  if (!midi_ws_buf_contains(midiWsHsBuf, (uint16_t)hdr_end, " 101 ") ||
+      !midi_ws_buf_contains(midiWsHsBuf, (uint16_t)hdr_end, expect)) {
+    return false;  // not a valid WebSocket upgrade
+  }
+  midi_net_mark_up();
+  DPRINTF("MIDI net: WebSocket upgraded %s:%d%s\n", midiNetHost, midiNetPort,
+          midiWsPath);
+  // Bytes after the header (if any) are the first WS frames.
+  if ((uint16_t)hdr_end < midiWsHsLen) {
+    if (!midi_ws_decode(&midiWsDec, midiWsHsBuf + hdr_end,
+                        (size_t)(midiWsHsLen - hdr_end), midi_ws_on_data,
+                        midi_ws_on_ctl, NULL)) {
+      return false;
+    }
+    midi_in_publish();
+  }
+  return true;
+}
+
 static err_t midi_net_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
                               err_t err) {
   (void)arg;
@@ -168,8 +333,38 @@ static err_t midi_net_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p,
     pbuf_free(p);
     return err;
   }
-  // Push received bytes into the IN queue; the m68k's Bconin drains the head
-  // one byte at a time via the bit-9 advance. Opaque bytes (D-02) — no parsing.
+
+  if (midiTransport == MIDI_TX_WS) {
+    if (midiNetState == MIDI_NET_WS_HANDSHAKE) {
+      if (!midi_ws_handshake_recv(p)) {
+        midi_net_reset();
+        pbuf_free(p);
+        return ERR_OK;
+      }
+    } else if (midiNetState == MIDI_NET_UP) {
+      // De-frame incoming WS frames into the IN queue (D-02 opaque bytes).
+      for (struct pbuf *q = p; q != NULL; q = q->next) {
+        if (!midi_ws_decode(&midiWsDec, (const uint8_t *)q->payload, q->len,
+                            midi_ws_on_data, midi_ws_on_ctl, NULL)) {
+          midi_net_reset();  // protocol error
+          pbuf_free(p);
+          return ERR_OK;
+        }
+        if (midiNetState != MIDI_NET_UP) break;  // a close frame reset the link
+      }
+      if (midiNetState == MIDI_NET_UP) {
+        midi_in_publish();  // publish the new head byte + depth for Bconin
+      }
+    }
+    if (midiNetState != MIDI_NET_DOWN && midiNetPcb != NULL) {
+      tcp_recved(pcb, p->tot_len);
+    }
+    pbuf_free(p);
+    return ERR_OK;
+  }
+
+  // TCP transport: push received bytes into the IN queue; the m68k's Bconin
+  // drains the head one byte at a time via the bit-9 advance. Opaque (D-02).
   for (struct pbuf *q = p; q != NULL; q = q->next) {
     const uint8_t *bytes = (const uint8_t *)q->payload;
     for (uint16_t i = 0; i < q->len; i++) {
@@ -199,9 +394,14 @@ static err_t midi_net_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err) {
     midi_net_reset();
     return err;
   }
-  midiNetState = MIDI_NET_UP;
-  midiNetBackoffMs = MIDI_NET_BACKOFF_MIN_MS;  // reset backoff on success
-  midiNetUpSince = get_absolute_time();
+  if (midiTransport == MIDI_TX_WS) {
+    // TCP is up; the link is not UP until the WebSocket 101 handshake completes.
+    midi_ws_start_handshake();
+    DPRINTF("MIDI net: TCP up, WebSocket handshake to %s:%d%s\n", midiNetHost,
+            midiNetPort, midiWsPath);
+    return ERR_OK;
+  }
+  midi_net_mark_up();
   DPRINTF("MIDI net: connected to %s:%d\n", midiNetHost, midiNetPort);
   return ERR_OK;
 }
@@ -260,13 +460,33 @@ static void midi_net_flush_out(void) {
     uint16_t contig = (midiOutHead > midiOutTail)
                           ? (uint16_t)(midiOutHead - midiOutTail)
                           : (uint16_t)(MIDI_OUT_QUEUE_SIZE - midiOutTail);
-    uint16_t n = (contig < sndbuf) ? contig : sndbuf;
-    if (tcp_write(midiNetPcb, &midiOutQueue[midiOutTail], n,
-                  TCP_WRITE_FLAG_COPY) != ERR_OK) {
-      break;  // couldn't enqueue — retry next poll
+    if (midiTransport == MIDI_TX_WS) {
+      // Wrap a contiguous run in one masked binary frame; leave room in the send
+      // window for the frame header + mask. Multiple frames per drain are fine,
+      // the receiver concatenates the payloads (D-02 order preserved).
+      if (sndbuf <= MIDI_WS_FRAME_OVERHEAD) break;  // no room for a frame yet
+      uint16_t maxpay = (uint16_t)(sndbuf - MIDI_WS_FRAME_OVERHEAD);
+      if (maxpay > MIDI_WS_TX_CHUNK) maxpay = MIDI_WS_TX_CHUNK;
+      uint16_t n = (contig < maxpay) ? contig : maxpay;
+      uint8_t mask[4];
+      midi_ws_mask_key(mask);
+      size_t flen = midi_ws_build_frame(midiWsTx, MIDI_WS_OP_BIN,
+                                        &midiOutQueue[midiOutTail], n, mask);
+      if (tcp_write(midiNetPcb, midiWsTx, (u16_t)flen, TCP_WRITE_FLAG_COPY) !=
+          ERR_OK) {
+        break;  // couldn't enqueue — retry next poll
+      }
+      midiOutTail = (uint16_t)((midiOutTail + n) & (MIDI_OUT_QUEUE_SIZE - 1));
+      wrote = true;
+    } else {
+      uint16_t n = (contig < sndbuf) ? contig : sndbuf;
+      if (tcp_write(midiNetPcb, &midiOutQueue[midiOutTail], n,
+                    TCP_WRITE_FLAG_COPY) != ERR_OK) {
+        break;  // couldn't enqueue — retry next poll
+      }
+      midiOutTail = (uint16_t)((midiOutTail + n) & (MIDI_OUT_QUEUE_SIZE - 1));
+      wrote = true;
     }
-    midiOutTail = (uint16_t)((midiOutTail + n) & (MIDI_OUT_QUEUE_SIZE - 1));
-    wrote = true;
   }
   if (wrote) {
     tcp_output(midiNetPcb);
@@ -373,6 +593,7 @@ const char *midi_net_status_str(void) {
     case MIDI_NET_UP:
       return "up";
     case MIDI_NET_CONNECTING:
+    case MIDI_NET_WS_HANDSHAKE:
       return "connecting";
     default:
       return "down";
