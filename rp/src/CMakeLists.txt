@@ -97,6 +97,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         emul.c
         gconfig.c
         midi.c
+        midi_ws.c
         network.c
         reset.c
         romemul.c

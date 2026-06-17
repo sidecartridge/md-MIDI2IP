@@ -20,7 +20,11 @@ Scope so far:
     half-open connection; public/NAT gateways and loopback are exempt),
     defensive per-connection error handling, and clean Ctrl-C shutdown.
 
-Usage:  python3 orchestrator/orchestrator.py [--host H] [--port P]
+EPIC-13 STORY-03: an optional **WebSocket** listener (--ws / --ws-port) that
+  shares the same ring. TCP and WebSocket players relay to each other through a
+  transport-agnostic connection layer (D-13); the byte stream is unchanged.
+
+Usage:  python3 orchestrator/orchestrator.py [--host H] [--port P] [--ws]
 """
 from __future__ import annotations
 
@@ -33,6 +37,8 @@ import signal
 import socket
 from dataclasses import dataclass
 from itertools import count
+
+import ws  # local: the stdlib RFC 6455 codec (EPIC-13 STORY-02)
 
 LOG = logging.getLogger("orchestrator")
 
@@ -163,6 +169,102 @@ def _enable_keepalive(sock: socket.socket) -> None:
         pass  # unsupported — non-fatal
 
 
+class Conn:
+    """Transport-agnostic connection wrapper (EPIC-13 STORY-03).
+
+    The relay reads a player's OUT bytes with `recv()` and pushes its IN bytes with
+    `send()` + `drain()`, never touching the underlying stream, so a TCP player and a
+    WebSocket player run through the same code (D-13). `transport` labels the carrier
+    for telemetry."""
+
+    transport = "tcp"
+
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._reader = reader
+        self._writer = writer
+        self.socket = writer.get_extra_info("socket")
+        self.peername = writer.get_extra_info("peername")
+
+    @property
+    def peer(self) -> str:
+        return f"{self.peername[0]}:{self.peername[1]}" if self.peername else "?"
+
+    @property
+    def ip(self) -> str:
+        return self.peername[0] if self.peername else "?"
+
+    def tune(self) -> None:
+        """Apply the socket tuning: TCP_NODELAY, keepalive, a bounded write buffer
+        (STORY-04). Both carriers ride a TCP socket, so this is shared."""
+        if self.socket is not None:
+            try:
+                self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except OSError:
+                pass  # not a TCP socket / unsupported — non-fatal
+            _enable_keepalive(self.socket)
+        try:
+            self._writer.transport.set_write_buffer_limits(high=WRITE_BUFFER_HIGH)
+        except (AttributeError, NotImplementedError):
+            pass
+
+    async def drain(self) -> None:
+        await self._writer.drain()
+
+    def close(self) -> None:
+        self._writer.close()
+
+    async def recv(self) -> bytes:  # pragma: no cover - overridden
+        raise NotImplementedError
+
+    def send(self, data: bytes) -> None:  # pragma: no cover - overridden
+        raise NotImplementedError
+
+
+class TcpConn(Conn):
+    """Raw TCP carrier (D-03): the bytes are the stream, verbatim."""
+
+    transport = "tcp"
+
+    async def recv(self) -> bytes:
+        return await self._reader.read(4096)
+
+    def send(self, data: bytes) -> None:
+        self._writer.write(data)
+
+
+class WsConn(Conn):
+    """WebSocket carrier (D-13): MIDI bytes ride in binary frames. `recv()` decodes
+    frames and answers control frames inline (pong on ping, EOF on close); `send()`
+    wraps the bytes in one unmasked binary frame."""
+
+    transport = "ws"
+
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        super().__init__(reader, writer)
+        self._dec = ws.FrameDecoder()
+
+    async def recv(self) -> bytes:
+        while True:
+            raw = await self._reader.read(4096)
+            if not raw:
+                return b""  # TCP EOF
+            out = bytearray()
+            for opcode, payload in self._dec.feed(raw):
+                if opcode in (ws.OP_BINARY, ws.OP_CONT, ws.OP_TEXT):
+                    out.extend(payload)
+                elif opcode == ws.OP_PING:
+                    self._writer.write(ws.pong_frame(payload))
+                elif opcode == ws.OP_CLOSE:
+                    return b""  # peer asked to close
+                # OP_PONG: ignore
+            if out:
+                return bytes(out)
+            # only control frames this read: keep reading for data
+
+    def send(self, data: bytes) -> None:
+        self._writer.write(ws.binary_frame(data))
+
+
 @dataclass
 class Player:
     """One connected player (a ST+RP, or a Hatari gateway)."""
@@ -170,7 +272,7 @@ class Player:
     id: int
     peer: str  # "ip:port"
     ip: str  # peer host only — node identity for one-connection-per-IP dedup
-    writer: asyncio.StreamWriter  # used by STORY-02 to push this player's IN bytes
+    conn: "Conn"  # transport-agnostic carrier (EPIC-13); push this player's IN via conn.send
     connected_at: float  # event-loop clock (seconds); for uptime
     bytes_out: int = 0  # bytes received FROM the player (their MIDI OUT)
     bytes_in: int = 0  # bytes sent TO the player (their MIDI IN)
@@ -223,7 +325,7 @@ def _drop_player(player: Player, reason: str) -> None:
     registry.remove(player.id)
     LOG.warning("dropping player %d (%s): %s", player.id, player.peer, reason)
     try:
-        player.writer.close()
+        player.conn.close()
     except (ConnectionError, OSError):
         pass
 
@@ -258,32 +360,19 @@ async def _resolve_host(player: Player) -> None:
     player.host = host
 
 
-async def handle_player(
-    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-) -> None:
-    """Per-connection coroutine: register, relay this player's OUT to the next
-    player's IN until EOF, deregister. Hardened (STORY-04): keepalive, bounded
-    write buffer, slow-player drop, and defensive error handling."""
-    sock = writer.get_extra_info("socket")
-    if sock is not None:
-        try:
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        except OSError:
-            pass  # not a TCP socket / unsupported — non-fatal
-        _enable_keepalive(sock)
-    try:
-        writer.transport.set_write_buffer_limits(high=WRITE_BUFFER_HIGH)
-    except (AttributeError, NotImplementedError):
-        pass
-
-    peername = writer.get_extra_info("peername")
-    peer = f"{peername[0]}:{peername[1]}" if peername else "?"
-    ip = peername[0] if peername else "?"
+async def handle_conn(conn: "Conn") -> None:
+    """Per-connection relay, transport-agnostic (EPIC-13 STORY-03): register, relay
+    this player's OUT to the next player's IN until EOF, deregister. Hardened
+    (STORY-04): keepalive, bounded write buffer, slow-player drop, defensive error
+    handling. The body is identical for a TCP or a WebSocket carrier (D-13)."""
+    conn.tune()
+    peer = conn.peer
+    ip = conn.ip
 
     # Supersede a prior connection from this IP on (re)connect (EPIC-11 STORY-02).
     # A private LAN address is always one-per-IP (a LAN node = one IP). For ANY IP
     # class (incl. loopback / NAT, which are exempt from the strict dedup), a
-    # *stalled* prior connection is a dead node that never FIN'd — drop it so the
+    # *stalled* prior connection is a dead node that never FIN'd; drop it so the
     # reconnection doesn't leave a phantom. The reconnection always gets a fresh,
     # incremented node id.
     now = asyncio.get_event_loop().time()
@@ -299,7 +388,7 @@ async def handle_player(
         id=next(_next_id),
         peer=peer,
         ip=ip,
-        writer=writer,
+        conn=conn,
         connected_at=now,
         last_active=now,
     )
@@ -310,17 +399,18 @@ async def handle_player(
     task.add_done_callback(_bg_tasks.discard)
     if _inspect:
         player.inspector = MidiMazeInspector()
-    LOG.info("player %d connected from %s (%d online)", player.id, peer, len(registry))
+    LOG.info("player %d connected from %s via %s (%d online)",
+             player.id, peer, conn.transport, len(registry))
 
     try:
         while True:
-            data = await reader.read(4096)
+            data = await conn.recv()
             if not data:
-                break  # clean EOF (peer closed)
+                break  # clean EOF (TCP close or WebSocket close frame)
             player.bytes_out += len(data)
             player.last_active = asyncio.get_event_loop().time()
             # Forward this player's OUT bytes to the next player's IN, verbatim
-            # (D-02) — a dumb relay; the firmware owns the ring (EPIC-09). Single
+            # (D-02): a dumb relay; the firmware owns the ring (EPIC-09). Single
             # source per target, so no interleaving.
             target = registry.next_player(player)
             if player.inspector is not None:  # --inspect: read-only protocol decode
@@ -330,23 +420,29 @@ async def handle_player(
             if target is None:
                 continue  # no ring peer yet (lone node)
             try:
-                target.writer.write(data)
+                target.conn.send(data)
                 # Bound the wait so one stuck player can't freeze the ring.
                 await asyncio.wait_for(
-                    target.writer.drain(), timeout=SLOW_PLAYER_TIMEOUT_S
+                    target.conn.drain(), timeout=SLOW_PLAYER_TIMEOUT_S
                 )
                 target.bytes_in += len(data)
             except asyncio.TimeoutError:
                 _drop_player(target, "too slow (write backpressure)")
             except (ConnectionError, OSError):
-                pass  # target died; its own handler will deregister it
+                # Do NOT drop the target here. A relay write can hit a transient
+                # error, and dropping mid-game collapses a 2-node ring to a
+                # ring-of-one that echoes a node's OUT back into its own IN, which
+                # MIDI Maze re-sends in a tight loop (a flood) while the dropped
+                # node reconnect-thrashes. The target's own handler (EOF/finally)
+                # and TCP keepalive deregister a genuinely dead peer.
+                pass
     except (ConnectionError, OSError) as exc:
         LOG.info("player %d (%s) read error: %s", player.id, peer, exc)
     except Exception:  # one bad connection must never take down the server
         LOG.exception("player %d (%s) handler crashed", player.id, peer)
     finally:
         registry.remove(player.id)
-        writer.close()  # don't await wait_closed(): can hang under shutdown-cancel
+        conn.close()  # don't await wait_closed(): can hang under shutdown-cancel
         LOG.info(
             "player %d (%s) disconnected; %d bytes out / %d in (%d online)",
             player.id,
@@ -355,6 +451,44 @@ async def handle_player(
             player.bytes_in,
             len(registry),
         )
+
+
+async def handle_player(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> None:
+    """TCP entry point (asyncio.start_server): relay over a raw-TCP carrier."""
+    await handle_conn(TcpConn(reader, writer))
+
+
+async def handle_ws(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+) -> None:
+    """WebSocket entry point (EPIC-13 STORY-03): run the RFC 6455 server handshake,
+    then relay over a WebSocket carrier in the same ring as the TCP players."""
+    try:
+        request_line = await reader.readline()
+        if not request_line:
+            writer.close()
+            return
+        raw_headers = bytearray()
+        while True:  # read header lines up to the blank line
+            line = await reader.readline()
+            if line in (b"\r\n", b"\n", b""):
+                break
+            raw_headers += line
+        headers = ws.parse_headers(bytes(raw_headers))
+        key = headers.get("sec-websocket-key", "")
+        if not key or not ws.is_upgrade(headers):
+            writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+            writer.close()
+            return
+        writer.write(ws.handshake_response(key))
+        await writer.drain()
+    except (ConnectionError, OSError):
+        writer.close()
+        return
+    await handle_conn(WsConn(reader, writer))
 
 
 # --- STORY-03: HTTP status -------------------------------------------------
@@ -368,8 +502,9 @@ def _status_snapshot() -> dict:
       uptime_s, listen, players_online   server-level fields
       ring        [player id, ...] in ring order — the relay forwards each node's
                   OUT to the *next* id, wrapping (a lone node echoes to itself)
-      players     [ {id, ip, host, peer, connected_s, idle_s, bytes_out, bytes_in},
-                    ... ] in ring order. bytes_out = received FROM the node (its
+      players     [ {id, ip, host, peer, transport, connected_s, idle_s, bytes_out,
+                    bytes_in}, ... ] in ring order. transport = tcp | ws (the node's
+                  carrier, D-13). bytes_out = received FROM the node (its
                   MIDI OUT); bytes_in = sent TO the node (its MIDI IN); idle_s =
                   seconds since the node's last byte (UI can dim a stalled node).
 
@@ -387,6 +522,7 @@ def _status_snapshot() -> dict:
                 "ip": p.ip,
                 "host": p.host,
                 "peer": p.peer,
+                "transport": p.conn.transport,
                 "connected_s": int(now - p.connected_at),
                 "idle_s": int(now - p.last_active),
                 "bytes_out": p.bytes_out,
@@ -463,7 +599,8 @@ _STATUS_PAGE = (
     "const gg=el('g',{class:'node'+(p.idle_s>STALE?' stalled':'')},N);"
     "el('circle',{cx:X,cy:Y,r:36},gg);"
     "el('text',{x:X,y:Y-6},gg).textContent='#'+p.id;"
-    "el('text',{x:X,y:Y+11,class:'sub'},gg).textContent=p.host||p.ip;"
+    "el('text',{x:X,y:Y+11,class:'sub'},gg).textContent="
+    "(p.host||p.ip)+' ['+(p.transport||'tcp')+']';"
     "el('text',{x:X,y:Y+54,class:'sub'},gg).textContent="
     "'out '+p.bytes_out+'  in '+p.bytes_in})}"
     "tick();setInterval(tick,2000);"
@@ -513,7 +650,8 @@ async def handle_http(
             pass
 
 
-async def serve(host: str, port: int, http_port: int, enable_http: bool = True) -> None:
+async def serve(host: str, port: int, http_port: int, enable_http: bool = True,
+                ws_enabled: bool = False, ws_port: int = 5006) -> None:
     global _started_at, _listen_addr
     loop = asyncio.get_event_loop()
     _started_at = loop.time()
@@ -539,10 +677,16 @@ async def serve(host: str, port: int, http_port: int, enable_http: bool = True) 
         # HTTP status shares this event loop with the game relay. --no-http drops
         # it so a status poll can never add jitter to the lock-step ring (C-01).
         http = await asyncio.start_server(handle_http, host, http_port)
-        LOG.info("orchestrator: game on %s:%d, HTTP status on %s:%d",
-                 host, port, host, http_port)
-    else:
-        LOG.info("orchestrator: game on %s:%d (HTTP status disabled)", host, port)
+    wssrv = None
+    if ws_enabled:
+        # Optional WebSocket players (D-13), in the same ring as the TCP players.
+        wssrv = await asyncio.start_server(handle_ws, host, ws_port)
+    LOG.info(
+        "orchestrator: game(tcp) on %s:%d%s%s",
+        host, port,
+        f", ws on {host}:{ws_port}" if ws_enabled else "",
+        f", HTTP status on {host}:{http_port}" if enable_http else " (HTTP status disabled)",
+    )
     try:
         # start_server is already accepting; stay alive until asked to stop.
         await stop
@@ -555,12 +699,14 @@ async def serve(host: str, port: int, http_port: int, enable_http: bool = True) 
         LOG.info("shutting down; closing %d player connection(s)", len(registry))
         for player in registry.players():
             try:
-                player.writer.close()
+                player.conn.close()
             except (ConnectionError, OSError):
                 pass
         game.close()
         if http is not None:
             http.close()
+        if wssrv is not None:
+            wssrv.close()
 
 
 def main() -> None:
@@ -583,6 +729,16 @@ def main() -> None:
         "--inspect", action="store_true",
         help="decode + log the MIDI Maze protocol as traffic passes (read-only)",
     )
+    parser.add_argument(
+        "--ws", action="store_true",
+        help="also accept WebSocket players on --ws-port (RFC 6455, D-13); off by "
+             "default, so the TCP-only behaviour is unchanged. A WebSocket node and "
+             "a TCP node share one ring.",
+    )
+    parser.add_argument(
+        "--ws-port", type=int, default=5006,
+        help="WebSocket port when --ws is set (default: 5006)",
+    )
     args = parser.parse_args()
     global _inspect
     _inspect = args.inspect
@@ -591,7 +747,8 @@ def main() -> None:
     )
     try:
         asyncio.run(serve(args.host, args.port, args.http_port,
-                          enable_http=not args.no_http))
+                          enable_http=not args.no_http,
+                          ws_enabled=args.ws, ws_port=args.ws_port))
     except KeyboardInterrupt:
         LOG.info("shutting down")
 

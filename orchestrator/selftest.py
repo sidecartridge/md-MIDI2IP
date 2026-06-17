@@ -10,12 +10,16 @@ Spawns orchestrator.py on test ports and validates it end to end:
   Phase C (--inspect decoder): the read-only MidiMazeInspector decodes a protocol
     byte stream into event labels (the only protocol awareness left after the
     relay went back to dumb — EPIC-11 STORY-01).
+  Phase D (websocket codec): the stdlib RFC 6455 handshake + frame codec (ws.py),
+    unit-tested in isolation before it is wired into the listener (EPIC-13 STORY-03).
 
 Stdlib only. Exit code 0 = PASS, 1 = FAIL.
 
 Usage:  python3 orchestrator/selftest.py
 """
+import base64
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -23,6 +27,9 @@ import time
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # import the local ws codec
+import ws  # noqa: E402
 
 HOST = "127.0.0.1"
 _failures: "list[str]" = []
@@ -98,6 +105,49 @@ def server(port: int, http_port: int, *extra: str):
             proc.kill()
 
 
+def ws_connect(port: int) -> "tuple[socket.socket, bool]":
+    """Open a TCP socket and run the RFC 6455 client handshake. Returns the socket
+    and whether the server answered 101 with the right Sec-WebSocket-Accept."""
+    s = socket.create_connection((HOST, port))
+    s.settimeout(2.0)
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    s.sendall(
+        f"GET / HTTP/1.1\r\nHost: {HOST}:{port}\r\nUpgrade: websocket\r\n"
+        f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+        f"Sec-WebSocket-Version: 13\r\n\r\n".encode("latin-1")
+    )
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = s.recv(1024)
+        if not chunk:
+            break
+        buf += chunk
+    ok = b" 101 " in buf and ws.accept_key(key).encode("ascii") in buf
+    return s, ok
+
+
+def ws_send(s: socket.socket, data: bytes) -> None:
+    """Send data as a masked binary frame (client-to-server frames must be masked)."""
+    s.sendall(ws.binary_frame(data, mask_key=os.urandom(4)))
+
+
+def ws_recv(s: socket.socket, dec: "ws.FrameDecoder", n: int, timeout: float = 2.0) -> bytes:
+    """Read until at least n application bytes have been decoded from server frames."""
+    s.settimeout(timeout)
+    out = bytearray()
+    try:
+        while len(out) < n:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            for opcode, payload in dec.feed(chunk):
+                if opcode in (ws.OP_BINARY, ws.OP_CONT):
+                    out.extend(payload)
+    except (socket.timeout, OSError):
+        pass
+    return bytes(out)
+
+
 def main() -> int:
     # Phase A — ring relay + status + drop/reconnect. Both clients are on
     # 127.0.0.1 (loopback is exempt from the per-IP dedup, so they coexist).
@@ -156,7 +206,7 @@ def main() -> int:
     # Reconnection supersede (EPIC-11 STORY-02): a prior same-IP connection that
     # has gone quiet past RECONNECT_STALE_S is stalled, so a reconnection drops it
     # and the new connection takes a fresh, incremented node id.
-    p = orch.Player(id=9, peer="x:1", ip="x", writer=None, connected_at=0.0, last_active=100.0)
+    p = orch.Player(id=9, peer="x:1", ip="x", conn=None, connected_at=0.0, last_active=100.0)
     check("fresh node not stalled", orch._is_stalled(p, 105.0) is False)
     check("quiet node stalled past threshold",
           orch._is_stalled(p, 100.0 + orch.RECONNECT_STALE_S + 1) is True)
@@ -172,11 +222,94 @@ def main() -> int:
     check("0x82 -> TERMINATE-GAME", insp.feed(b"\x82") == ["TERMINATE-GAME"])
     check("0x86 -> NAME-DIALOG", insp.feed(b"\x86") == ["NAME-DIALOG"])
 
+    # Phase D — the stdlib RFC 6455 codec (EPIC-13 STORY-02), unit-tested in
+    # isolation before it is wired into the listener (STORY-03).
+    print("websocket codec (RFC 6455, stdlib):")
+    import ast
+
+    # Handshake accept value: the canonical RFC 6455 4.2.2 example vector.
+    check("Sec-WebSocket-Accept matches the RFC vector",
+          ws.accept_key("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+    resp = ws.handshake_response("dGhlIHNhbXBsZSBub25jZQ==")
+    check("101 response carries the accept header",
+          b"HTTP/1.1 101" in resp and b"s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" in resp)
+    check("is_upgrade detects a websocket request",
+          ws.is_upgrade({"upgrade": "websocket", "connection": "keep-alive, Upgrade"}) is True)
+
+    # Encode (server, unmasked) -> decode round-trip; 200 bytes exercises the 16-bit length.
+    payload = bytes(range(200))
+    check("server binary frame round-trips",
+          ws.FrameDecoder().feed(ws.binary_frame(payload)) == [(ws.OP_BINARY, payload)])
+
+    # A client-to-server frame is masked; it must decode to the plaintext.
+    masked = ws.binary_frame(b"\x00\x80\x01", mask_key=b"\x37\xfa\x21\x3d")
+    check("masked client frame: mask bit set", (masked[1] & 0x80) != 0)
+    check("masked client frame decodes to plaintext",
+          ws.FrameDecoder().feed(masked) == [(ws.OP_BINARY, b"\x00\x80\x01")])
+
+    # A frame split across two feeds reassembles (TCP can split anywhere).
+    wire = ws.binary_frame(b"maze-bytes")
+    dec = ws.FrameDecoder()
+    check("partial feed yields nothing yet", dec.feed(wire[:3]) == [])
+    check("remainder completes the frame", dec.feed(wire[3:]) == [(ws.OP_BINARY, b"maze-bytes")])
+
+    # Two frames in one read both come out, in order.
+    check("two frames in one read decode in order",
+          ws.FrameDecoder().feed(ws.binary_frame(b"AA") + ws.binary_frame(b"BB"))
+          == [(ws.OP_BINARY, b"AA"), (ws.OP_BINARY, b"BB")])
+
+    # Control frames carry the right opcodes.
+    check("pong frame has the pong opcode", (ws.pong_frame(b"hi")[0] & 0x0F) == ws.OP_PONG)
+    check("close frame has the close opcode", (ws.close_frame()[0] & 0x0F) == ws.OP_CLOSE)
+
+    # Stdlib-only guard: ws.py imports nothing beyond hashlib, base64, struct.
+    ws_src = (Path(__file__).resolve().parent / "ws.py").read_text()
+    imported = set()
+    for node in ast.walk(ast.parse(ws_src)):
+        if isinstance(node, ast.Import):
+            imported.update(n.name.split(".")[0] for n in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    imported.discard("__future__")
+    check("ws.py is stdlib-only (hashlib/base64/struct)",
+          imported <= {"hashlib", "base64", "struct"})
+
+    # Phase E — a mixed ring (EPIC-13 STORY-03): with --ws, a TCP player and a
+    # WebSocket player join one ring and relay to each other byte-exact.
+    with server(5097, 8097, "--ws", "--ws-port", "5096"):
+        print("mixed ring (TCP + WebSocket):")
+        t = conn(5097)  # TCP player joins first -> ring order [t, w]
+        w, ok = ws_connect(5096)  # WebSocket player second
+        check("ws handshake completed (101 + accept)", ok)
+        wdec = ws.FrameDecoder()
+        time.sleep(0.3)
+
+        st = status(8097)
+        check("2 players online (tcp + ws)", st["players_online"] == 2)
+        check("status reports transport per node",
+              sorted(p.get("transport") for p in st["players"]) == ["tcp", "ws"])
+
+        t.sendall(b"\x00\x84\x10")  # t's OUT -> w's IN (t -> next is w)
+        check("TCP node OUT relays to WebSocket node IN",
+              ws_recv(w, wdec, 3) == b"\x00\x84\x10")
+        ws_send(w, b"\x99\x42")  # w's OUT -> t's IN (w is last, wraps to t)
+        check("WebSocket node OUT relays to TCP node IN", recv_exact(t, 2) == b"\x99\x42")
+
+        # A disconnect removes the node from the ring/status (not left displayed).
+        w.close()
+        time.sleep(0.5)
+        st2 = status(8097)
+        check("WebSocket node removed on disconnect (1 online)",
+              st2["players_online"] == 1)
+        check("the node left in the ring is the TCP one",
+              len(st2["players"]) == 1 and st2["players"][0]["transport"] == "tcp")
+        t.close()
+
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")
         return 1
-    print("PASS — orchestrator dumb relay + IP-dedup + --inspect decoder")
+    print("PASS: orchestrator relay + IP-dedup + --inspect decoder + ws codec + mixed ring")
     return 0
 
 

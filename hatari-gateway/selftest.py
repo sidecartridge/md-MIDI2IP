@@ -140,14 +140,65 @@ def test_bridge() -> None:
             pass
 
 
+def test_websocket() -> None:
+    print("EPIC-13 STORY-04 — WebSocket client (framing + handshake):")
+    import ws  # reachable via gateway's sys.path insert to ../orchestrator
+
+    # Framing over a socketpair: the wrapper is the client, the bare end the server.
+    c_raw, s_raw = socket.socketpair()
+    try:
+        wsc = gateway._WsSocket(c_raw)
+        wsc.sendall(b"\x42\x80")
+        raw = s_raw.recv(4096)
+        check("client OUT frame is masked", (raw[1] & 0x80) != 0)
+        check("client OUT frame decodes server-side",
+              ws.FrameDecoder().feed(raw) == [(ws.OP_BINARY, b"\x42\x80")])
+        s_raw.sendall(ws.binary_frame(b"\x99\x01"))  # server -> client (unmasked)
+        check("client decodes server binary frame", wsc.recv(4096) == b"\x99\x01")
+        # a server ping is answered with a pong, then the next data is returned
+        s_raw.sendall(ws.encode_frame(ws.OP_PING, b"hi") + ws.binary_frame(b"\x07"))
+        check("client returns data after a server ping", wsc.recv(4096) == b"\x07")
+        check("client answered the ping with a pong",
+              any(op == ws.OP_PONG for op, _ in ws.FrameDecoder().feed(s_raw.recv(4096))))
+    finally:
+        c_raw.close()
+        s_raw.close()
+
+    # Handshake: a fake server completes the RFC 6455 upgrade.
+    c2, s2 = socket.socketpair()
+    try:
+        def fake_server() -> None:
+            req = b""
+            while b"\r\n\r\n" not in req:
+                part = s2.recv(1024)
+                if not part:
+                    return
+                req += part
+            hdrs = ws.parse_headers(req.split(b"\r\n\r\n")[0])
+            s2.sendall(ws.handshake_response(hdrs["sec-websocket-key"]))
+
+        th = threading.Thread(target=fake_server, daemon=True)
+        th.start()
+        wrapped = gateway.ws_handshake(c2, "127.0.0.1", 5006, "/")
+        th.join(timeout=2)
+        check("ws_handshake returns a framed socket", isinstance(wrapped, gateway._WsSocket))
+        wrapped.sendall(b"\x55")
+        check("post-handshake client frame decodes",
+              ws.FrameDecoder().feed(s2.recv(4096)) == [(ws.OP_BINARY, b"\x55")])
+    finally:
+        c2.close()
+        s2.close()
+
+
 def main() -> int:
     test_fifo_lifecycle()
     test_bridge()
+    test_websocket()
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")
         return 1
-    print("PASS — Hatari gateway FIFO lifecycle + bridge validated")
+    print("PASS: Hatari gateway FIFO lifecycle + bridge + WebSocket client validated")
     return 0
 
 

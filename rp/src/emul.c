@@ -53,12 +53,14 @@ static void cmdBooster(const char *arg);
 static void cmdPing(const char *arg);
 static void cmdHost(const char *arg);
 static void cmdPort(const char *arg);
+static void cmdTransport(const char *arg);
 
 // Command table
 static const Command commands[] = {
     {"m", cmdMenu},
     {"h", cmdHost},
     {"p", cmdPort},
+    {"t", cmdTransport},
     {"e", cmdFirmware},
     {"f", cmdFirmware},
     {"x", cmdBooster},
@@ -147,14 +149,17 @@ static void printMinimalStatus(void) {
   term_printString(ip_addr_isany_val(ip) ? "-" : ipaddr_ntoa(&ip));
   term_printString("\n  Server : ");
   term_printString(midi_net_status_str());
-  term_printString("\n");
+  term_printString(" (");
+  term_printString(midi_net_transport_str());
+  term_printString(")\n");
 }
 
 // Signature of the displayed status — the menu only re-renders when it changes.
 static void statusSignature(char *buf, size_t len) {
   ip_addr_t ip = network_getCurrentIp();
-  snprintf(buf, len, "%s|%s|%s", network_wifiConnStatusStr(),
-           ip_addr_isany_val(ip) ? "-" : ipaddr_ntoa(&ip), midi_net_status_str());
+  snprintf(buf, len, "%s|%s|%s|%s", network_wifiConnStatusStr(),
+           ip_addr_isany_val(ip) ? "-" : ipaddr_ntoa(&ip), midi_net_status_str(),
+           midi_net_transport_str());
 }
 
 static void menu(void) {
@@ -167,12 +172,14 @@ static void menu(void) {
   SettingsConfigEntry *cfgHost =
       settings_find_entry(aconfig_getContext(), MIDI_CFG_HOST);
   SettingsConfigEntry *cfgPort =
-      settings_find_entry(aconfig_getContext(), MIDI_CFG_PORT);
+      settings_find_entry(aconfig_getContext(), midi_net_port_key());
   term_printString("Orchestrator\n");
   term_printString("  [H]ost : ");
   term_printString((cfgHost != NULL) ? cfgHost->value : "-");
   term_printString("\n  [P]ort : ");
   term_printString((cfgPort != NULL) ? cfgPort->value : "-");
+  term_printString("\n  [T]ransport : ");
+  term_printString(midi_net_transport_str());
   term_printString("\n\n");
 
   // Status: Wi-Fi, local IP, orchestrator (EPIC-06 STORY-05)
@@ -249,13 +256,28 @@ void cmdPort(const char *arg) {
   char *endptr = NULL;
   long port = strtol(input, &endptr, 10);
   if (input[0] != '\0' && *endptr == '\0' && port >= 1 && port <= 65535) {
-    settings_put_integer(aconfig_getContext(), MIDI_CFG_PORT, (int)port);
+    settings_put_integer(aconfig_getContext(), midi_net_port_key(), (int)port);
     settings_save(aconfig_getContext(), true);
     midi_net_reload();  // apply live: drop + reconnect to the new endpoint
   } else if (input[0] != '\0') {
     term_printString("Invalid port (must be 1-65535).\n");
   }
   term_clearInputBuffer();
+  menu();
+}
+
+// EPIC-13 STORY-06: toggle the transport (tcp <-> ws). A single keypress flips
+// the value, persists it to aconfig, and applies it live (drop + reconnect over
+// the new carrier). No DATA_INPUT step — it is a two-value toggle.
+void cmdTransport(const char *arg) {
+  (void)arg;
+  SettingsConfigEntry *e =
+      settings_find_entry(aconfig_getContext(), MIDI_CFG_TRANSPORT);
+  const char *cur = (e != NULL) ? e->value : MIDI_DEFAULT_TRANSPORT;
+  const char *next = (cur[0] == 'w' || cur[0] == 'W') ? "tcp" : "ws";
+  settings_put_string(aconfig_getContext(), MIDI_CFG_TRANSPORT, next);
+  settings_save(aconfig_getContext(), true);
+  midi_net_reload();  // apply live: drop + reconnect over the new transport
   menu();
 }
 

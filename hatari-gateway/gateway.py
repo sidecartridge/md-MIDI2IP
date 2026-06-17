@@ -20,18 +20,29 @@ Scope so far:
     orchestrator socket (select-driven, single-thread, verbatim).
 The orchestrator client lifecycle (connect / reconnect / status) is STORY-03.
 
-Usage:  python3 hatari-gateway/gateway.py [--dir DIR]
+EPIC-13 STORY-04: an optional `--transport ws` carries the same bytes over a
+WebSocket (D-13), reusing the orchestrator's stdlib RFC 6455 codec (`ws.py`).
+This is the known-good client that proves the WebSocket path before the firmware.
+
+Usage:  python3 hatari-gateway/gateway.py [--dir DIR] [--transport tcp|ws]
 """
 from __future__ import annotations
 
 import argparse
+import base64
 import errno
 import fcntl
 import os
 import select
 import socket
 import stat
+import sys
 import time
+
+# Reuse the orchestrator's RFC 6455 codec (single source of truth, EPIC-13).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "orchestrator"))
+import ws  # noqa: E402
 
 FIFO_OUT = "midi_out.fifo"  # Atari MIDI OUT: gateway reads  (Hatari --midi-out)
 FIFO_IN = "midi_in.fifo"    # Atari MIDI IN:  gateway writes (Hatari --midi-in)
@@ -90,6 +101,70 @@ def _write_all(fd: int, data: bytes) -> None:
     view = memoryview(data)
     while view:
         view = view[os.write(fd, view):]
+
+
+class _WsSocket:
+    """Wrap a connected socket so `bridge()` keeps using sendall/recv/fileno while
+    the bytes ride WebSocket frames (EPIC-13 STORY-04). A client-to-server frame is
+    masked (RFC 6455); recv decodes server frames, answers a ping with a pong, and
+    reports EOF on a close frame. The codec is the orchestrator's `ws.py`."""
+
+    def __init__(self, sock: socket.socket, initial: bytes = b"") -> None:
+        self._sock = sock
+        self._dec = ws.FrameDecoder()
+        self._initial = initial  # frame bytes that trailed the handshake response
+
+    def fileno(self) -> int:
+        return self._sock.fileno()
+
+    def setblocking(self, flag: bool) -> None:
+        self._sock.setblocking(flag)
+
+    def sendall(self, data: bytes) -> None:
+        self._sock.sendall(ws.binary_frame(data, mask_key=os.urandom(4)))
+
+    def recv(self, n: int) -> bytes:
+        while True:
+            if self._initial:
+                raw, self._initial = self._initial, b""
+            else:
+                raw = self._sock.recv(n)
+                if not raw:
+                    return b""  # TCP EOF
+            out = bytearray()
+            for opcode, payload in self._dec.feed(raw):
+                if opcode in (ws.OP_BINARY, ws.OP_CONT, ws.OP_TEXT):
+                    out.extend(payload)
+                elif opcode == ws.OP_PING:
+                    self._sock.sendall(ws.pong_frame(payload, mask_key=os.urandom(4)))
+                elif opcode == ws.OP_CLOSE:
+                    return b""  # server asked to close
+            if out:
+                return bytes(out)
+            # only control frames this read: loop for more (server sends data or close)
+
+    def close(self) -> None:
+        self._sock.close()
+
+
+def ws_handshake(sock: socket.socket, host: str, port: int, path: str = "/") -> _WsSocket:
+    """Run the RFC 6455 client handshake on a connected socket and return a framed
+    wrapper. Raises ConnectionError if the server does not answer 101 with the
+    expected Sec-WebSocket-Accept."""
+    key = base64.b64encode(os.urandom(16)).decode("ascii")
+    sock.sendall(ws.client_handshake_request(f"{host}:{port}", path, key))
+    sock.settimeout(5.0)
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = sock.recv(1024)
+        if not chunk:
+            raise ConnectionError("server closed during the WebSocket handshake")
+        buf += chunk
+    header, _, rest = buf.partition(b"\r\n\r\n")
+    if b" 101 " not in header or ws.accept_key(key).encode("ascii") not in header:
+        raise ConnectionError("WebSocket handshake failed (no 101 / bad accept)")
+    sock.settimeout(None)
+    return _WsSocket(sock, initial=rest)
 
 
 def bridge(out_fd: int, in_fd: int, sock: socket.socket) -> None:
@@ -151,6 +226,14 @@ def main() -> None:
     parser.add_argument(
         "--port", type=int, default=5005, help="orchestrator port (default: 5005)"
     )
+    parser.add_argument(
+        "--transport", choices=("tcp", "ws"), default="tcp",
+        help="carrier to the orchestrator: tcp (default) or ws (WebSocket, D-13). "
+             "Use ws to reach an orchestrator started with --ws.",
+    )
+    parser.add_argument(
+        "--ws-path", default="/", help="WebSocket request path when --transport ws (default: /)",
+    )
     args = parser.parse_args()
 
     out_path, in_path = create_fifos(args.dir)
@@ -165,9 +248,11 @@ def main() -> None:
         print("waiting for Hatari to open the MIDI FIFOs ... (Ctrl-C to quit)")
         out_fd, in_fd = open_fifos(out_path, in_path)
         print("connected to Hatari.")
-        print(f"connecting to orchestrator {args.host}:{args.port} ...")
+        print(f"connecting to orchestrator {args.host}:{args.port} ({args.transport}) ...")
         sock = socket.create_connection((args.host, args.port))
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if args.transport == "ws":
+            sock = ws_handshake(sock, args.host, args.port, args.ws_path)
         print("connected to orchestrator — bridging. (reconnect is STORY-03)")
         bridge(out_fd, in_fd, sock)
         print("bridge ended (a side disconnected).")
