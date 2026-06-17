@@ -51,9 +51,13 @@ them.
 
 Selection:
 
-- **Node (firmware or gateway):** a persisted transport setting, default `tcp`.
+- **Node (firmware or gateway):** a persisted transport setting, default `tcp`. The
+  node stores a port per carrier (a TCP port and a WebSocket port), because the
+  orchestrator's two listeners bind different ports; the toggle selects the carrier and
+  its matching port together.
 - **Orchestrator:** a CLI parameter enables the WebSocket listener (default off, so an
-  existing deployment is unchanged). The TCP and WebSocket listeners run at the same time.
+  existing deployment is unchanged). The TCP and WebSocket listeners run at the same time
+  on different ports (`--port` 5005, `--ws-port` 5006 by default).
 
 WebSocket profile:
 

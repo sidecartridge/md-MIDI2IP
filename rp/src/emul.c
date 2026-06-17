@@ -172,7 +172,7 @@ static void menu(void) {
   SettingsConfigEntry *cfgHost =
       settings_find_entry(aconfig_getContext(), MIDI_CFG_HOST);
   SettingsConfigEntry *cfgPort =
-      settings_find_entry(aconfig_getContext(), MIDI_CFG_PORT);
+      settings_find_entry(aconfig_getContext(), midi_net_port_key());
   term_printString("Orchestrator\n");
   term_printString("  [H]ost : ");
   term_printString((cfgHost != NULL) ? cfgHost->value : "-");
@@ -256,7 +256,7 @@ void cmdPort(const char *arg) {
   char *endptr = NULL;
   long port = strtol(input, &endptr, 10);
   if (input[0] != '\0' && *endptr == '\0' && port >= 1 && port <= 65535) {
-    settings_put_integer(aconfig_getContext(), MIDI_CFG_PORT, (int)port);
+    settings_put_integer(aconfig_getContext(), midi_net_port_key(), (int)port);
     settings_save(aconfig_getContext(), true);
     midi_net_reload();  // apply live: drop + reconnect to the new endpoint
   } else if (input[0] != '\0') {

@@ -9,8 +9,10 @@ static SettingsConfigEntry defaultEntries[] = {
     {MIDI_CFG_HOST, SETTINGS_TYPE_STRING, MIDI_DEFAULT_HOST},
     {MIDI_CFG_PORT, SETTINGS_TYPE_INT, "5005"},
     {MIDI_CFG_ENABLED, SETTINGS_TYPE_BOOL, "true"},
-    // Transport carrier: tcp (default) or ws (EPIC-13 STORY-06, D-13)
+    // Transport carrier: tcp (default) or ws (EPIC-13 STORY-06, D-13). The TCP
+    // and WebSocket listeners use different ports, so each carrier has its own.
     {MIDI_CFG_TRANSPORT, SETTINGS_TYPE_STRING, MIDI_DEFAULT_TRANSPORT},
+    {MIDI_CFG_WS_PORT, SETTINGS_TYPE_INT, "5006"},
     {MIDI_CFG_WS_PATH, SETTINGS_TYPE_STRING, MIDI_DEFAULT_WS_PATH},
 };
 

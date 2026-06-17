@@ -50,10 +50,12 @@
 #define MIDI_CFG_PORT "MIDI_PORT"        // int: orchestrator TCP port
 #define MIDI_CFG_ENABLED "MIDI_ENABLED"  // bool: connect to the orchestrator
 #define MIDI_CFG_TRANSPORT "MIDI_TRANSPORT"  // string: "tcp" | "ws" (EPIC-13 D-13)
+#define MIDI_CFG_WS_PORT "MIDI_WS_PORT"      // int: orchestrator WebSocket port
 #define MIDI_CFG_WS_PATH "MIDI_WS_PATH"      // string: WebSocket request path
 #define MIDI_DEFAULT_HOST "0.0.0.0"      // placeholder until set (STORY-04)
-#define MIDI_DEFAULT_PORT 5005
+#define MIDI_DEFAULT_PORT 5005           // TCP carrier (orchestrator --port)
 #define MIDI_DEFAULT_TRANSPORT "tcp"     // EPIC-13: default carrier (D-13)
+#define MIDI_DEFAULT_WS_PORT 5006        // WebSocket carrier (orchestrator --ws-port)
 #define MIDI_DEFAULT_WS_PATH "/"         // EPIC-13: WebSocket request path
 
 // Register the MIDI command handler with chandler and initialise the shared
@@ -78,6 +80,10 @@ const char *midi_net_status_str(void);
 
 // EPIC-13 STORY-06: the active transport for display ("tcp"/"ws").
 const char *midi_net_transport_str(void);
+
+// EPIC-13: the aconfig port key for the active transport (MIDI_PORT for tcp,
+// MIDI_WS_PORT for ws), so the menu shows/edits the right one.
+const char *midi_net_port_key(void);
 
 // EPIC-03 STORY-06: format a one-line orchestrator liveness report into buf
 // (endpoint, link state, and uptime when connected).

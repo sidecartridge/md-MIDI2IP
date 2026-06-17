@@ -80,7 +80,11 @@ static volatile bool midiActive = false;  // EPIC-09 fast-path stream gate
 
 // Endpoint config (EPIC-06 STORY-01) — loaded from aconfig in midi_init().
 static char midiNetHost[SETTINGS_MAX_VALUE_LENGTH] = MIDI_DEFAULT_HOST;
-static uint16_t midiNetPort = MIDI_DEFAULT_PORT;
+// The TCP and WebSocket listeners use different ports, so each carrier keeps its
+// own; midiNetPort is the active one, picked by the transport (EPIC-13 STORY-06).
+static uint16_t midiTcpPort = MIDI_DEFAULT_PORT;    // MIDI_PORT (tcp carrier)
+static uint16_t midiWsPort = MIDI_DEFAULT_WS_PORT;  // MIDI_WS_PORT (ws carrier)
+static uint16_t midiNetPort = MIDI_DEFAULT_PORT;    // active carrier's port
 static bool midiEnabled = true;
 
 // EPIC-13 STORY-05: transport selection. Default TCP (D-13). STORY-06 wires the
@@ -605,6 +609,12 @@ const char *midi_net_transport_str(void) {
   return (midiTransport == MIDI_TX_WS) ? "ws" : "tcp";
 }
 
+// EPIC-13: the aconfig port key for the active transport, so the menu shows and
+// edits the port that matches the selected carrier.
+const char *midi_net_port_key(void) {
+  return (midiTransport == MIDI_TX_WS) ? MIDI_CFG_WS_PORT : MIDI_CFG_PORT;
+}
+
 // STORY-06: format a one-line orchestrator liveness report — endpoint, link
 // state, and (when up) how long the session has been connected. Reuses the
 // persistent connection; no extra probe traffic.
@@ -707,7 +717,11 @@ static void midi_load_config(void) {
     }
     e = settings_find_entry(cfg, MIDI_CFG_PORT);
     if (e != NULL && e->value[0] != '\0') {
-      midiNetPort = (uint16_t)atoi(e->value);
+      midiTcpPort = (uint16_t)atoi(e->value);
+    }
+    e = settings_find_entry(cfg, MIDI_CFG_WS_PORT);
+    if (e != NULL && e->value[0] != '\0') {
+      midiWsPort = (uint16_t)atoi(e->value);
     }
     e = settings_find_entry(cfg, MIDI_CFG_ENABLED);
     if (e != NULL && e->value[0] != '\0') {
@@ -724,9 +738,13 @@ static void midi_load_config(void) {
       snprintf(midiWsPath, sizeof(midiWsPath), "%s", e->value);
     }
   }
-  DPRINTF("MIDI cfg: host=%s port=%u enabled=%d transport=%s path=%s\n",
-          midiNetHost, (unsigned)midiNetPort, (int)midiEnabled,
-          midi_net_transport_str(), midiWsPath);
+  // The active carrier's port follows the transport selection (EPIC-13 STORY-06).
+  midiNetPort = (midiTransport == MIDI_TX_WS) ? midiWsPort : midiTcpPort;
+  DPRINTF(
+      "MIDI cfg: host=%s tcp=%u ws=%u active=%u enabled=%d transport=%s path=%s\n",
+      midiNetHost, (unsigned)midiTcpPort, (unsigned)midiWsPort,
+      (unsigned)midiNetPort, (int)midiEnabled, midi_net_transport_str(),
+      midiWsPath);
 }
 
 // EPIC-06 STORY-04: re-read the endpoint config and restart the connection so a
