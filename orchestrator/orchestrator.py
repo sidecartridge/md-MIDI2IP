@@ -429,11 +429,13 @@ async def handle_conn(conn: "Conn") -> None:
             except asyncio.TimeoutError:
                 _drop_player(target, "too slow (write backpressure)")
             except (ConnectionError, OSError):
-                # The target's socket is broken (it disconnected, possibly
-                # half-open with no FIN, so its own reader is still blocked).
-                # Drop it now so it leaves the ring/status immediately instead of
-                # lingering until TCP keepalive notices.
-                _drop_player(target, "write failed (peer gone)")
+                # Do NOT drop the target here. A relay write can hit a transient
+                # error, and dropping mid-game collapses a 2-node ring to a
+                # ring-of-one that echoes a node's OUT back into its own IN, which
+                # MIDI Maze re-sends in a tight loop (a flood) while the dropped
+                # node reconnect-thrashes. The target's own handler (EOF/finally)
+                # and TCP keepalive deregister a genuinely dead peer.
+                pass
     except (ConnectionError, OSError) as exc:
         LOG.info("player %d (%s) read error: %s", player.id, peer, exc)
     except Exception:  # one bad connection must never take down the server
