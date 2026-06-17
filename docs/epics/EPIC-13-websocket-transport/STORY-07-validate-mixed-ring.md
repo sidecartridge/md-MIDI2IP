@@ -2,7 +2,7 @@
 id: STORY-07
 epic: EPIC-13
 title: Validate a mixed TCP + WebSocket ring (ST + Hatari)
-status: todo
+status: done
 ---
 
 ## Goal
@@ -12,11 +12,11 @@ through a single orchestrator.
 
 ## Tasks
 
-- [ ] Start the orchestrator with `--ws`; confirm both listeners bind and `status.json` reports the transport per node
-- [ ] Bring up the ST node on transport `ws` plus a TCP node (a second ST, or a Hatari gateway on `tcp`); both appear in the ring with their transport
-- [ ] Play a full MIDI Maze match across the mixed ring (election through gameplay), matching the EPIC-12 STORY-03 checklist
-- [ ] Repeat with the transports swapped (ST on `tcp`, the other node on `ws`)
-- [ ] Record any latency difference against the all-TCP ring (C-01)
+- [x] Start the orchestrator with `--ws`; confirm both listeners bind and `status.json` reports the transport per node
+- [x] Bring up the ST node on transport `ws` plus a TCP node (a second ST, or a Hatari gateway on `tcp`); both appear in the ring with their transport
+- [x] Play a full MIDI Maze match across the mixed ring (election through gameplay), matching the EPIC-12 STORY-03 checklist
+- [x] Repeat with the transports swapped (ST on `tcp`, the other node on `ws`)
+- [x] Record any latency difference against the all-TCP ring (C-01)
 
 ## Acceptance
 

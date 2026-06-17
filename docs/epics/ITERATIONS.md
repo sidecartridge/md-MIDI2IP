@@ -10,7 +10,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 1 | Architecture spike: build the full stack end to end | done |
 | 2 | Transport redesign, HW re-validation + orchestrator revamp | done |
 | 3 | Hardware test pass: ST + Hatari verification checklist | in progress |
-| 4 | Optional WebSocket transport (TCP or WebSocket) | in progress |
+| 4 | Optional WebSocket transport (TCP or WebSocket) | done |
 
 ---
 
@@ -109,6 +109,15 @@ TCP stays the default, and a TCP node and a WebSocket node can share one ring.
 
 | Epic | Status | Note |
 | --- | --- | --- |
-| EPIC-13 · Optional WebSocket transport | todo | stdlib RFC 6455 on the orchestrator (mixed ring), a firmware WebSocket client + toggle, optional gateway parity; `wss` deferred |
+| EPIC-13 · Optional WebSocket transport | done | stdlib RFC 6455 on the orchestrator (mixed ring), a firmware WebSocket client + toggle, gateway parity; `wss` deferred |
 
-**Outcome:** pending.
+**Outcome:** EPIC-13 landed: WebSocket is an opt-in carrier alongside the default TCP,
+selectable per node and enabled per orchestrator, with TCP and WebSocket nodes sharing
+one ring. The orchestrator hand-rolls RFC 6455 on the standard library (handshake plus a
+streaming frame codec) and serves both listeners on separate ports through a
+transport-agnostic relay. The firmware carries the same opaque byte stream (D-02) over
+masked binary frames, with a `[T]ransport` boot-menu toggle and a port per carrier. Both
+transports play MIDI Maze on real hardware. One regression surfaced and was fixed: a
+disconnect-removal change that dropped a peer on a transient relay write error collapsed
+a 2-node ring into a self-echo flood, which slowed both carriers until it was reverted to
+the tolerant relay. `wss` / TLS stays deferred (the RP has no mbedTLS linked).
