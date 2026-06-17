@@ -2,7 +2,7 @@
 id: STORY-04
 epic: EPIC-13
 title: Hatari gateway WebSocket client (validates the WS path)
-status: todo
+status: done
 ---
 
 ## Goal
@@ -14,11 +14,11 @@ proves STORY-02 and STORY-03 against a real client.
 
 ## Tasks
 
-- [ ] Add `--transport tcp|ws` (default `tcp`) to `gateway.py` (`hatari-gateway/gateway.py:143-154`)
-- [ ] When `ws`, after `socket.create_connection` (`gateway.py:169`) perform the client handshake (random key, validate the 101 and accept value) before `bridge()`
-- [ ] Wrap the socket so `bridge()` (`gateway.py:95-131`) sends masked binary frames and decodes incoming frames with no other change; answer a server ping with a pong
-- [ ] Share the WebSocket helper with the orchestrator codec (a small stdlib-only module both import) rather than duplicating it
-- [ ] Add selftest coverage for the gateway WebSocket framing path
+- [x] Add `--transport tcp|ws` (default `tcp`) to `gateway.py` (`hatari-gateway/gateway.py:143-154`)
+- [x] When `ws`, after `socket.create_connection` (`gateway.py:169`) perform the client handshake (random key, validate the 101 and accept value) before `bridge()`
+- [x] Wrap the socket so `bridge()` (`gateway.py:95-131`) sends masked binary frames and decodes incoming frames with no other change; answer a server ping with a pong
+- [x] Share the WebSocket helper with the orchestrator codec (a small stdlib-only module both import) rather than duplicating it
+- [x] Add selftest coverage for the gateway WebSocket framing path
 
 ## Acceptance
 

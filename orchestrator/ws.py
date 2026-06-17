@@ -49,6 +49,21 @@ def handshake_response(key: str) -> bytes:
     ).encode("ascii")
 
 
+def client_handshake_request(host: str, path: str, key: str) -> bytes:
+    """The client GET Upgrade request for a server handshake (EPIC-13 STORY-04/06).
+    The caller supplies a base64 Sec-WebSocket-Key (16 random bytes); key generation
+    stays with the caller so this module needs no random-number import."""
+    return (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n"
+    ).encode("latin-1")
+
+
 def parse_headers(raw: bytes) -> dict[str, str]:
     """Parse an HTTP header block (after the request line) into a lowercased dict."""
     headers: dict[str, str] = {}
