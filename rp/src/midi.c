@@ -600,6 +600,11 @@ const char *midi_net_status_str(void) {
   }
 }
 
+// EPIC-13 STORY-06: the active transport for the menu/status display.
+const char *midi_net_transport_str(void) {
+  return (midiTransport == MIDI_TX_WS) ? "ws" : "tcp";
+}
+
 // STORY-06: format a one-line orchestrator liveness report — endpoint, link
 // state, and (when up) how long the session has been connected. Reuses the
 // persistent connection; no extra probe traffic.
@@ -608,11 +613,11 @@ void midi_net_ping(char *buf, size_t len) {
     uint32_t up_s =
         (uint32_t)(absolute_time_diff_us(midiNetUpSince, get_absolute_time()) /
                    1000000);
-    snprintf(buf, len, "%s:%d up (%lus)", midiNetHost, midiNetPort,
-             (unsigned long)up_s);
+    snprintf(buf, len, "%s:%d [%s] up (%lus)", midiNetHost, midiNetPort,
+             midi_net_transport_str(), (unsigned long)up_s);
   } else {
-    snprintf(buf, len, "%s:%d %s", midiNetHost, midiNetPort,
-             midi_net_status_str());
+    snprintf(buf, len, "%s:%d [%s] %s", midiNetHost, midiNetPort,
+             midi_net_transport_str(), midi_net_status_str());
   }
 }
 
@@ -709,9 +714,19 @@ static void midi_load_config(void) {
       char c = e->value[0];
       midiEnabled = (c == 't' || c == 'T' || c == '1' || c == 'y' || c == 'Y');
     }
+    e = settings_find_entry(cfg, MIDI_CFG_TRANSPORT);
+    if (e != NULL && e->value[0] != '\0') {
+      char c = e->value[0];
+      midiTransport = (c == 'w' || c == 'W') ? MIDI_TX_WS : MIDI_TX_TCP;
+    }
+    e = settings_find_entry(cfg, MIDI_CFG_WS_PATH);
+    if (e != NULL && e->value[0] != '\0') {
+      snprintf(midiWsPath, sizeof(midiWsPath), "%s", e->value);
+    }
   }
-  DPRINTF("MIDI cfg: host=%s port=%u enabled=%d\n", midiNetHost,
-          (unsigned)midiNetPort, (int)midiEnabled);
+  DPRINTF("MIDI cfg: host=%s port=%u enabled=%d transport=%s path=%s\n",
+          midiNetHost, (unsigned)midiNetPort, (int)midiEnabled,
+          midi_net_transport_str(), midiWsPath);
 }
 
 // EPIC-06 STORY-04: re-read the endpoint config and restart the connection so a
