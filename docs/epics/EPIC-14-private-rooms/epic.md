@@ -2,7 +2,7 @@
 id: EPIC-14
 iteration: 5
 title: Private rooms (room-key MIDI rings)
-status: in-progress
+status: done
 ---
 
 ## Goal

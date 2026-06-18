@@ -2,7 +2,7 @@
 id: STORY-10
 epic: EPIC-14
 title: Validate private rooms on hardware (two isolated rings, ST + Hatari)
-status: todo
+status: done
 ---
 
 ## Goal
@@ -12,11 +12,11 @@ room of ST + Hatari plays a full match.
 
 ## Tasks
 
-- [ ] Provision two rooms over REST with the admin key; confirm `GET /rooms` lists both
-- [ ] Two nodes that entered room key A play together; a node with room key B is isolated (absent from A's ring and traffic)
-- [ ] Play a full MIDI Maze match inside a room (ST on `ws` with a room key + Hatari on `ws --room`), election through gameplay
-- [ ] The ring view room selector shows each room's ring independently
-- [ ] A join with an unprovisioned key is refused
+- [x] Provision two rooms over REST with the admin key; confirm `GET /rooms` lists both
+- [x] Two nodes that entered room key A play together; a node with room key B is isolated (absent from A's ring and traffic)
+- [x] Play a full MIDI Maze match inside a room (ST on `ws` with a room key + Hatari on `ws --room`), election through gameplay
+- [x] The ring view room selector shows each room's ring independently
+- [x] A join with an unprovisioned key is refused
 
 ## Acceptance
 
