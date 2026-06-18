@@ -74,14 +74,19 @@ You need an **orchestrator** running somewhere on the network, plus one or more 
 ### 1 · Start the orchestrator
 
 ```sh
-python3 orchestrator/orchestrator.py            # binds 0.0.0.0:5005, HTTP status on :8080
-# options: --host H --port P --http-port P --inspect --no-http
+python3 orchestrator/orchestrator.py            # TCP game on 0.0.0.0:5005, HTTP status on :8080
+# common options:
+#   --ws [--ws-port 5006]   also accept WebSocket nodes (see "WebSocket transport")
+#   --admin-key <key>       enable the rooms REST API (see "Private rooms")
+#   --rooms-file <path>     persist provisioned rooms across restarts
+#   --host H  --port P  --http-port P  --inspect  --no-http
 ```
 
 Open `http://<orchestrator-ip>:8080/` for the live **ring view**: each connected node is
-drawn around the ring with its host/IP and bytes in/out, refreshing every 2 s. `--inspect`
-logs the decoded MIDI Maze protocol as it passes. `--no-http` drops the status page (which
-rules out any status-poll jitter on the lock-step ring).
+drawn around the ring with its host/IP, transport, and bytes in/out, refreshing every 2 s.
+A room dropdown picks which ring to watch, and `/lobby` lists every room. `--inspect` logs
+the decoded MIDI Maze protocol as it passes. `--no-http` drops the status page (which rules
+out any status-poll jitter on the lock-step ring).
 
 ### 2 · Bring up a real Atari ST node (SidecarTridge Multi-device)
 
@@ -93,6 +98,10 @@ rules out any status-poll jitter on the lock-step ring).
    **`[P]ort`** for its port (default `5005`). The values are saved to the app config
    and **persist across reboots**. You only need to do this the first time, or whenever
    the orchestrator's address changes; otherwise just launch.
+   - **`[T]ransport`** cycles `tcp` / `ws` (see [WebSocket transport](#-websocket-transport)).
+     `[P]ort` edits the port for the selected transport.
+   - **`[R]oom`** sets a play-room key to join a private ring (see
+     [Private rooms](#-private-rooms-play-rooms)); leave it empty for the default ring.
 4. Press **`[E]xit to GEM`** to launch the MIDI firmware now, or let the countdown finish
    and it auto-launches. (**`[X] Booster`** returns to the Booster.) The cartridge's BIOS
    device-3 hook is now the ST's MIDI device, bridged to the orchestrator.
@@ -106,6 +115,8 @@ Bridge Hatari's file-based MIDI to the orchestrator with the gateway:
 ```sh
 python3 hatari-gateway/gateway.py --host <orchestrator-ip> --port 5005
 # default --dir /tmp/hatari-midi, orchestrator 127.0.0.1:5005
+# WebSocket instead of TCP:  --transport ws --port 5006
+# join a private room:       --transport ws --port 5006 --room DIEGOROOM
 ```
 
 The gateway prints the exact Hatari command. Run Hatari with the two MIDI FIFOs:
@@ -124,10 +135,91 @@ real **ST + SidecarTridge** nodes and **Hatari + gateway** nodes) to the **same
 orchestrator**:
 
 1. Start the orchestrator.
-2. Bring up each participant (step 2 or step 3) pointed at the orchestrator's IP.
-3. Watch `http://<orchestrator-ip>:8080/`: every node appears on the ring.
+2. Bring up each participant (step 2 or step 3) pointed at the orchestrator's IP. To play
+   in a private group, give every participant the **same room key** (see
+   [Private rooms](#-private-rooms-play-rooms)); otherwise they all share the default ring.
+3. Watch `http://<orchestrator-ip>:8080/`: every node appears on the ring (pick the room in
+   the dropdown).
 4. In MIDI Maze, run master election / count players and start the game. All nodes play
    over IP.
+
+## 🌐 WebSocket transport
+
+By default a node reaches the orchestrator over a plain **TCP** socket (port 5005). A node
+can instead use **WebSocket**, which rides a standard HTTP port and an Upgrade handshake,
+so it can pass an HTTP reverse proxy (nginx, Cloudflare, a PaaS load balancer) or a
+firewall that only allows web ports. The MIDI bytes are identical; WebSocket only wraps the
+carrier. TCP and WebSocket nodes share the same ring, so you can mix them.
+
+Enable it on each side:
+
+- **Orchestrator:** add `--ws` (and optionally `--ws-port`, default 5006). Both listeners
+  run at once.
+  ```sh
+  python3 orchestrator/orchestrator.py --ws        # TCP :5005, WebSocket :5006, HTTP :8080
+  ```
+- **Real Atari ST node:** in the boot menu press **`[T]ransport`** to cycle `tcp` / `ws`.
+  Each carrier keeps its own port, so **`[P]ort`** edits the port for the selected
+  transport. The choice persists across reboots.
+- **Hatari gateway:** add `--transport ws` and point `--port` at the WebSocket port.
+  ```sh
+  python3 hatari-gateway/gateway.py --host <orchestrator-ip> --port 5006 --transport ws
+  ```
+
+No TLS yet: `wss` is not supported on the RP, so the WebSocket carries clear text. For an
+exposed deployment, put a TLS-terminating reverse proxy in front and speak `ws` to the
+orchestrator on the internal network.
+
+## 🔒 Private rooms (play rooms)
+
+One orchestrator can host **many independent rings** at once. A **room key** is a short
+word that selects a private ring: every node that enters the same key plays together,
+isolated from the other rooms. A node with no key joins a shared **default room** (the
+original single-ring behavior). Rooms ride the WebSocket carrier (the key travels in the
+handshake), so a room node uses the `ws` transport.
+
+### Operator: provision the rooms
+
+Start the orchestrator with an admin key, then create rooms over a small REST API on the
+HTTP port. A join to a room that was not provisioned is refused, so only the rooms you
+create exist.
+
+```sh
+python3 orchestrator/orchestrator.py --ws --admin-key secret --rooms-file rooms.json
+
+# create a named room
+curl -X POST http://<orchestrator-ip>:8080/rooms -H "X-Admin-Key: secret" -d '{"key":"DIEGOROOM"}'
+# or mint a short auto-generated code
+curl -X POST http://<orchestrator-ip>:8080/rooms -H "X-Admin-Key: secret"
+# list rooms / delete a room
+curl http://<orchestrator-ip>:8080/rooms
+curl -X DELETE http://<orchestrator-ip>:8080/rooms/DIEGOROOM -H "X-Admin-Key: secret"
+```
+
+`--rooms-file` keeps the provisioned rooms across restarts. An empty room is reclaimed
+after `--room-ttl` seconds (default 600); the default room is never reclaimed. Each ring
+caps at the MIDI Maze limit of 16 players.
+
+### Player: enter the room key
+
+- **Real Atari ST node:** set `[T]ransport` to `ws`, then press **`[R]oom`** and type the
+  key (for example `DIEGOROOM`). It persists across reboots; leave it empty for the default
+  room.
+- **Hatari gateway:** add `--transport ws --room DIEGOROOM`.
+  ```sh
+  python3 hatari-gateway/gateway.py --host <orchestrator-ip> --port 5006 --transport ws --room DIEGOROOM
+  ```
+
+### Watch a room
+
+The ring view at `http://<orchestrator-ip>:8080/` has a room dropdown and highlights the
+master node. `http://<orchestrator-ip>:8080/lobby` lists every room with its player count
+and game phase, each a link into that room's ring. `http://<orchestrator-ip>:8080/?room=DIEGOROOM`
+opens straight into a room.
+
+A room key gates a ring; it is not a password for the traffic. Without TLS it travels in
+clear text, so use a reverse proxy for TLS and to guard the admin REST API on an exposed
+deployment.
 
 ## 🙏 Acknowledgements
 

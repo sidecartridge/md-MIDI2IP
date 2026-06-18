@@ -6,11 +6,24 @@ a virtual player with no hardware needed. Python 3 standard library only.
 
 ```sh
 python3 hatari-gateway/gateway.py [--dir DIR] [--host H] [--port P]
-# default: DIR=/tmp/hatari-midi, orchestrator 127.0.0.1:5005
+                                  [--transport tcp|ws] [--room KEY]
+# default: DIR=/tmp/hatari-midi, orchestrator 127.0.0.1:5005, transport tcp
 ```
 
 It waits for Hatari to open the FIFOs. Then it connects to the orchestrator and bridges
 raw bytes both ways. Start the orchestrator first.
+
+## Transport and rooms
+
+By default the gateway uses a plain TCP socket. Add `--transport ws` to reach the
+orchestrator over WebSocket instead (point `--port` at the orchestrator's WebSocket port,
+5006 by default); this traverses HTTP reverse proxies and firewalls that only allow web
+ports. Add `--room KEY` (with `--transport ws`) to join a private ring, so this node plays
+only with the others that entered the same key; without `--room` it joins the default ring.
+
+```sh
+python3 hatari-gateway/gateway.py --host <orchestrator-ip> --port 5006 --transport ws --room DIEGOROOM
+```
 
 It creates two FIFOs and prints the exact Hatari command. The `--midi-in` / `--midi-out`
 file flags enable MIDI on their own (no separate `--midi` flag):
