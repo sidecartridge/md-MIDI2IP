@@ -46,6 +46,7 @@ _next_id = count(1)  # monotonic player ids
 _started_at = 0.0  # event-loop clock when serving began (for uptime)
 _listen_addr = ""  # "host:port" of the game TCP server, for display
 _inspect = False  # --inspect: decode the MIDI Maze protocol as traffic passes
+_admin_key = ""  # --admin-key: required for REST room writes (EPIC-14); "" refuses writes
 
 
 # --- MIDI Maze protocol inspection (in-line, read-only) --------------------
@@ -328,26 +329,44 @@ class Registry:
 
 
 class Rooms:
-    """One ring (Registry) per room key (EPIC-14 / D-14). The default room is always
-    present. STORY-02 auto-creates other rooms on first join; STORY-03 makes them
-    pre-provisioned, so an unknown key is refused before this point."""
+    """One ring (Registry) per room key (EPIC-14 / D-14). Rooms are pre-provisioned
+    over REST (STORY-03); a join to an unknown key is refused before reaching the
+    relay. The default room is always present and needs no provisioning."""
 
     def __init__(self) -> None:
         self._rooms: "dict[str, Registry]" = {DEFAULT_ROOM: Registry()}
 
+    def is_open(self, key: str) -> bool:
+        """Whether a node may join this room (the default room or a provisioned one)."""
+        return key == DEFAULT_ROOM or key in self._rooms
+
     def get(self, key: str) -> Registry:
-        """The room's ring, creating it on first use (STORY-02 stub)."""
+        """The room's ring. Falls back to the default room if the key is unknown
+        (handle_ws gates unknown keys before this, so the fallback is defensive).
+        Use an explicit None check: an empty Registry is falsy (it has __len__)."""
         reg = self._rooms.get(key)
-        if reg is None:
-            reg = Registry()
-            self._rooms[key] = reg
-        return reg
+        return reg if reg is not None else self._rooms[DEFAULT_ROOM]
+
+    def create(self, key: str) -> bool:
+        """Provision a room. Returns True if it was newly created."""
+        if key in self._rooms:
+            return False
+        self._rooms[key] = Registry()
+        return True
+
+    def delete(self, key: str) -> "list[Player] | None":
+        """Remove a room and return its players to close, or None if it is the
+        default room or does not exist."""
+        if key == DEFAULT_ROOM or key not in self._rooms:
+            return None
+        return self._rooms.pop(key).players()
 
     def registry(self, key: str) -> "Registry | None":
         return self._rooms.get(key)
 
-    def keys(self) -> "list[str]":
-        return list(self._rooms)
+    def summaries(self) -> "list[dict]":
+        """A per-room summary for GET /rooms (room key + player count)."""
+        return [{"room": k, "players": len(r)} for k, r in self._rooms.items()]
 
     def all_players(self) -> "list[Player]":
         return [p for reg in self._rooms.values() for p in reg.players()]
@@ -535,6 +554,12 @@ async def handle_ws(
         # Room key from Authorization: Bearer <roomkey> (D-14); empty -> default room.
         auth = headers.get("authorization", "")
         room_key = _normalize_room(auth[7:]) if auth[:7].lower() == "bearer " else DEFAULT_ROOM
+        # Pre-provisioned rooms (D-14): refuse a join to a room that was not created.
+        if not rooms.is_open(room_key):
+            writer.write(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+            writer.close()
+            return
         writer.write(ws.handshake_response(key))
         await writer.drain()
     except (ConnectionError, OSError):
@@ -666,34 +691,125 @@ def _status_html() -> bytes:
     return _STATUS_PAGE
 
 
+def _rooms_json() -> bytes:
+    """GET /rooms body: the room list with a per-room player count (EPIC-14)."""
+    return json.dumps({"rooms": rooms.summaries()}, indent=2).encode("utf-8")
+
+
+def _admin_ok(headers: "dict[str, str]") -> bool:
+    """REST writes need the configured admin key. Refused when --admin-key is unset."""
+    return bool(_admin_key) and headers.get("x-admin-key", "") == _admin_key
+
+
+def _valid_room(key: str) -> bool:
+    """A normalized room key: 1 to 16 ASCII alphanumerics (D-14)."""
+    return 1 <= len(key) <= 16 and key.isascii() and key.isalnum()
+
+
+def _room_key_from_body(body: bytes) -> str:
+    """Pull the room key from a POST /rooms body: JSON {"key": ...}, `key=VALUE`,
+    or the raw body."""
+    txt = body.decode("latin-1", "ignore").strip()
+    if txt[:1] == "{":
+        try:
+            return str(json.loads(txt).get("key", ""))
+        except (ValueError, TypeError):
+            return ""
+    if txt.startswith("key="):
+        return txt[4:].split("&", 1)[0]
+    return txt
+
+
+async def _http_send(writer: asyncio.StreamWriter, status: str, body: bytes = b"",
+                     ctype: str = "application/json") -> None:
+    writer.write(
+        (
+            f"HTTP/1.1 {status}\r\n"
+            f"Content-Type: {ctype}\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "Connection: close\r\n\r\n"
+        ).encode("latin-1")
+        + body
+    )
+    await writer.drain()
+
+
+async def _route_http(writer: asyncio.StreamWriter, method: str, path: str,
+                      headers: "dict[str, str]", body: bytes) -> None:
+    """Route one HTTP request: the status page / JSON, and the EPIC-14 rooms REST."""
+    path_only = path.split("?", 1)[0]
+    if method == "GET" and path_only == "/status.json":
+        await _http_send(writer, "200 OK", _status_json())
+        return
+    if method == "GET" and path_only == "/rooms":
+        await _http_send(writer, "200 OK", _rooms_json())
+        return
+    if method == "POST" and path_only == "/rooms":
+        if not _admin_ok(headers):
+            await _http_send(writer, "403 Forbidden", b'{"error":"admin key required"}')
+            return
+        key = _normalize_room(_room_key_from_body(body))
+        if not _valid_room(key):
+            await _http_send(writer, "400 Bad Request", b'{"error":"invalid room key"}')
+            return
+        created = rooms.create(key)
+        await _http_send(writer, "200 OK",
+                         json.dumps({"room": key, "created": created}).encode("utf-8"))
+        return
+    if method == "DELETE" and path_only.startswith("/rooms/"):
+        if not _admin_ok(headers):
+            await _http_send(writer, "403 Forbidden", b'{"error":"admin key required"}')
+            return
+        key = _normalize_room(path_only[len("/rooms/"):])
+        dropped = rooms.delete(key)
+        if dropped is None:
+            await _http_send(writer, "404 Not Found", b'{"error":"no such room"}')
+            return
+        for player in dropped:  # close the players of the removed room
+            try:
+                player.conn.close()
+            except (ConnectionError, OSError):
+                pass
+        await _http_send(writer, "200 OK",
+                         json.dumps({"room": key, "deleted": True}).encode("utf-8"))
+        return
+    if method == "GET" and path_only == "/":
+        await _http_send(writer, "200 OK", _status_html(), "text/html; charset=utf-8")
+        return
+    await _http_send(writer, "404 Not Found", b'{"error":"not found"}')
+
+
 async def handle_http(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
-    """Minimal read-only HTTP/1.1 responder: / -> HTML, /status.json -> JSON."""
+    """HTTP/1.1 responder: the read-only status page / JSON, plus the rooms REST API
+    (EPIC-14). Served in the asyncio loop, so room reads/writes are race-free."""
     try:
         request_line = await reader.readline()
         if not request_line:
+            writer.close()
             return
         parts = request_line.decode("latin-1").split()
+        method = parts[0].upper() if parts else "GET"
         path = parts[1] if len(parts) >= 2 else "/"
-        while True:  # consume headers up to the blank line
+        raw_headers = bytearray()
+        while True:  # read header lines up to the blank line
             line = await reader.readline()
             if line in (b"\r\n", b"\n", b""):
                 break
-        if path.startswith("/status.json"):
-            body, ctype = _status_json(), "application/json"
-        else:
-            body, ctype = _status_html(), "text/html; charset=utf-8"
-        writer.write(
-            (
-                "HTTP/1.1 200 OK\r\n"
-                f"Content-Type: {ctype}\r\n"
-                f"Content-Length: {len(body)}\r\n"
-                "Connection: close\r\n\r\n"
-            ).encode("latin-1")
-            + body
-        )
-        await writer.drain()
+            raw_headers += line
+        headers = ws.parse_headers(bytes(raw_headers))
+        body = b""
+        try:
+            clen = int(headers.get("content-length", "0") or "0")
+        except ValueError:
+            clen = 0
+        if 0 < clen <= 65536:
+            try:
+                body = await reader.readexactly(clen)
+            except asyncio.IncompleteReadError as exc:
+                body = exc.partial
+        await _route_http(writer, method, path, headers, body)
     except (ConnectionError, OSError):
         pass
     finally:
@@ -794,9 +910,15 @@ def main() -> None:
         "--ws-port", type=int, default=5006,
         help="WebSocket port when --ws is set (default: 5006)",
     )
+    parser.add_argument(
+        "--admin-key", default="",
+        help="admin key for the rooms REST API (EPIC-14): create/delete need it via "
+             "an X-Admin-Key header. Unset refuses writes; the default room still works.",
+    )
     args = parser.parse_args()
-    global _inspect
+    global _inspect, _admin_key
     _inspect = args.inspect
+    _admin_key = args.admin_key or ""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )

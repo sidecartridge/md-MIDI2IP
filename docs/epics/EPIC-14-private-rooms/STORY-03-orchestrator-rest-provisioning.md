@@ -2,7 +2,7 @@
 id: STORY-03
 epic: EPIC-14
 title: Orchestrator REST provisioning API (admin-key writes, reject unknown)
-status: todo
+status: done
 ---
 
 ## Goal
@@ -12,12 +12,12 @@ admin key; reads are open. A join to a room that was not provisioned is refused.
 
 ## Tasks
 
-- [ ] Add REST routes to the HTTP server: `GET /rooms` (list, open), `POST /rooms` with a JSON or form body carrying the key (create, admin), `DELETE /rooms/{key}` (delete, admin)
-- [ ] Admin auth: writes require an `X-Admin-Key` header matching `--admin-key`; when `--admin-key` is unset, writes return 403 (the default room still works without provisioning)
-- [ ] Enforce pre-provisioned rooms: a WS join with a key that is not provisioned is rejected at the handshake (HTTP 403, connection closed); the default room is always present
-- [ ] Deleting a room closes its players' connections and removes the ring
-- [ ] Normalize keys (uppercase) on create / delete / lookup so the menu, the gateway, and REST agree
-- [ ] selftest: `POST /rooms` (with the admin key) creates a room and a WS node then joins it; a join with an unknown key is refused; `POST` without the admin key returns 403; `GET /rooms` lists rooms
+- [x] Add REST routes to the HTTP server: `GET /rooms` (list, open), `POST /rooms` with a JSON or form body carrying the key (create, admin), `DELETE /rooms/{key}` (delete, admin)
+- [x] Admin auth: writes require an `X-Admin-Key` header matching `--admin-key`; when `--admin-key` is unset, writes return 403 (the default room still works without provisioning)
+- [x] Enforce pre-provisioned rooms: a WS join with a key that is not provisioned is rejected at the handshake (HTTP 403, connection closed); the default room is always present
+- [x] Deleting a room closes its players' connections and removes the ring
+- [x] Normalize keys (uppercase) on create / delete / lookup so the menu, the gateway, and REST agree
+- [x] selftest: `POST /rooms` (with the admin key) creates a room and a WS node then joins it; a join with an unknown key is refused; `POST` without the admin key returns 403; `GET /rooms` lists rooms
 
 ## Acceptance
 

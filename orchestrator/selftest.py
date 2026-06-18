@@ -24,6 +24,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
@@ -103,6 +104,21 @@ def server(port: int, http_port: int, *extra: str):
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+def http_req(http_port: int, method: str, path: str, body: "bytes | None" = None,
+             headers: "dict | None" = None) -> "tuple[int, bytes]":
+    """REST helper: returns (status_code, body). HTTP errors return their code too."""
+    req = urllib.request.Request(
+        f"http://{HOST}:{http_port}{path}", data=body, method=method
+    )
+    for name, value in (headers or {}).items():
+        req.add_header(name, value)
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
 
 
 def ws_connect(port: int, room: str = "") -> "tuple[socket.socket, bool]":
@@ -311,8 +327,12 @@ def main() -> int:
 
     # Phase F — private rooms (EPIC-14 STORY-02): WS nodes that present the same
     # room key (Authorization: Bearer) share a ring; a different room is isolated.
-    with server(5089, 8089, "--ws", "--ws-port", "5088"):
+    # Rooms are pre-provisioned over REST (STORY-03), so create them first.
+    with server(5089, 8089, "--ws", "--ws-port", "5088", "--admin-key", "K"):
         print("private rooms (per-room rings):")
+        for r in ("ALPHA", "BETA"):
+            http_req(8089, "POST", "/rooms",
+                     json.dumps({"key": r}).encode(), {"X-Admin-Key": "K"})
         a1, ok1 = ws_connect(5088, room="ALPHA")
         a2, ok2 = ws_connect(5088, room="ALPHA")
         b1, okb = ws_connect(5088, room="BETA")
@@ -344,11 +364,39 @@ def main() -> int:
         a2.close()
         b1.close()
 
+    # Phase G — room provisioning over REST (EPIC-14 STORY-03): admin-guarded
+    # writes, reject-unknown on join, list, and delete.
+    with server(5085, 8085, "--ws", "--ws-port", "5084", "--admin-key", "SECRET"):
+        print("room provisioning (REST):")
+        code, _ = http_req(8085, "POST", "/rooms", b'{"key":"ALPHA"}')
+        check("POST without admin key refused (403)", code == 403)
+        code, _ = http_req(8085, "POST", "/rooms", b'{"key":"ALPHA"}',
+                           {"X-Admin-Key": "SECRET"})
+        check("POST with admin key creates the room", code == 200)
+        code, body = http_req(8085, "GET", "/rooms")
+        check("GET /rooms lists the new room",
+              code == 200 and any(r["room"] == "ALPHA"
+                                  for r in json.loads(body)["rooms"]))
+        a, oka = ws_connect(5084, room="ALPHA")
+        check("join a provisioned room succeeds", oka)
+        g, okg = ws_connect(5084, room="GHOST")
+        check("join an unprovisioned room is refused", not okg)
+        a.close()
+        try:
+            g.close()
+        except OSError:
+            pass
+        code, _ = http_req(8085, "DELETE", "/rooms/ALPHA", None, {"X-Admin-Key": "SECRET"})
+        check("DELETE with admin key removes the room", code == 200)
+        code, body = http_req(8085, "GET", "/rooms")
+        check("deleted room no longer listed",
+              all(r["room"] != "ALPHA" for r in json.loads(body)["rooms"]))
+
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")
         return 1
-    print("PASS: orchestrator relay + IP-dedup + --inspect decoder + ws codec + mixed ring + rooms")
+    print("PASS: orchestrator relay + IP-dedup + --inspect + ws codec + mixed ring + rooms + REST")
     return 0
 
 
