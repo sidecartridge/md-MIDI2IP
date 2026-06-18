@@ -452,6 +452,8 @@ def main() -> int:
         page = http_req(8081, "GET", "/")[1].decode("utf-8")
         check("ring view has a room selector polling rooms",
               "<select id='room'" in page and "fetch('rooms'" in page)
+        check("room options use HTML createElement (not the SVG el helper)",
+              "document.createElement('option')" in page and "el('option'" not in page)
         wsa.close()
         tcp.close()
 

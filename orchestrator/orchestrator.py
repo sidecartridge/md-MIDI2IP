@@ -832,8 +832,10 @@ _STATUS_PAGE = (
     "const d=await(await fetch('rooms',{cache:'no-store'})).json();"
     "const rs=d.rooms||[],sig=rs.map(r=>r.room).join('|');if(sig===roomSig)return;"
     "roomSig=sig;const cur=sel.value;sel.textContent='';for(const r of rs){"
-    "const o=el('option',{value:r.room},sel);"
-    "o.textContent=(r.room||'(default)')+' ('+r.players+'/'+r.cap+')';}"
+    # <option> is an HTML element; build it with createElement, not el() which
+    # uses the SVG namespace (that produces options that never populate the select).
+    "const o=document.createElement('option');o.value=r.room;"
+    "o.textContent=(r.room||'(default)')+' ('+r.players+'/'+r.cap+')';sel.appendChild(o);}"
     "if(rs.some(r=>r.room===cur))sel.value=cur;"
     "if(!preset&&URLROOM&&rs.some(r=>r.room===URLROOM)){sel.value=URLROOM;preset=true;}"
     "}catch(e){}}"
