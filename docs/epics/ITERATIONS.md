@@ -12,6 +12,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 3 | Hardware test pass: ST + Hatari verification checklist | in progress |
 | 4 | Optional WebSocket transport (TCP or WebSocket) | done |
 | 5 | Private rooms (room-key MIDI rings) | done |
+| 6 | Robustness pass: buffer cleanup on disconnect | in progress |
 
 ---
 
@@ -153,3 +154,22 @@ firmware with a `[R]oom` boot-menu entry. Validated on real hardware (two isolat
 ST + Hatari). Two browser/bench bugs were found and fixed along the way: the room dropdown
 built SVG-namespaced options, and the menu Server line froze after a config-edit reconnect.
 **Iteration complete.**
+
+---
+
+## Iteration 6: Robustness pass
+
+**Goal:** stale bytes can survive a connection drop even though the common path works. The
+firmware clears its IN queue on a reset but not its OUT queue, so a reconnect inside the
+staleness window replays pre-drop bytes. Tighten buffer cleanup on every side so a drop
+leaves nothing queued: the firmware flushes both queues and resets its link state, and the
+orchestrator and gateway are confirmed to hold no queued or buffered data once a connection
+closes.
+
+**Epics**
+
+| Epic | Status | Note |
+| --- | --- | --- |
+| EPIC-15 · Robustness pass | todo | flush the firmware OUT queue on a drop, confirm the orchestrator + gateway drop everything on disconnect, validate reconnects on hardware |
+
+**Outcome:** pending.
