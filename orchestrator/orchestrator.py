@@ -153,6 +153,17 @@ DNS_TIMEOUT_S = 1.0
 _dns_cache: "dict[str, str]" = {}  # ip -> resolved hostname (or the ip on failure)
 _bg_tasks: "set" = set()  # keep background lookups referenced so they aren't GC'd
 
+# EPIC-14: rooms. A room key selects a private ring; the default room (empty key)
+# carries TCP nodes and keyless WS nodes. The key arrives as Authorization: Bearer
+# on the WS handshake (D-14).
+DEFAULT_ROOM = ""
+
+
+def _normalize_room(key: "str | None") -> str:
+    """Normalize a room key for matching: trimmed and uppercased. Empty means the
+    default room. Charset/length are validated at provisioning (STORY-03)."""
+    return (key or "").strip().upper()
+
 
 def _enable_keepalive(sock: socket.socket) -> None:
     """Detect a silently-dead player (no FIN) in ~10s instead of TCP's default.
@@ -279,6 +290,7 @@ class Player:
     last_active: float = 0.0  # event-loop time of the last byte received (liveness)
     host: str = ""  # reverse-DNS name (STORY-03); falls back to the IP
     inspector: "MidiMazeInspector | None" = None  # per-player --inspect decoder
+    room: str = DEFAULT_ROOM  # EPIC-14: which room's ring this player is in
 
 
 class Registry:
@@ -315,15 +327,44 @@ class Registry:
         return len(self._players)
 
 
-# Single shared registry (STORY-02 ring relay + STORY-03 HTTP read from this).
-registry = Registry()
+class Rooms:
+    """One ring (Registry) per room key (EPIC-14 / D-14). The default room is always
+    present. STORY-02 auto-creates other rooms on first join; STORY-03 makes them
+    pre-provisioned, so an unknown key is refused before this point."""
+
+    def __init__(self) -> None:
+        self._rooms: "dict[str, Registry]" = {DEFAULT_ROOM: Registry()}
+
+    def get(self, key: str) -> Registry:
+        """The room's ring, creating it on first use (STORY-02 stub)."""
+        reg = self._rooms.get(key)
+        if reg is None:
+            reg = Registry()
+            self._rooms[key] = reg
+        return reg
+
+    def registry(self, key: str) -> "Registry | None":
+        return self._rooms.get(key)
+
+    def keys(self) -> "list[str]":
+        return list(self._rooms)
+
+    def all_players(self) -> "list[Player]":
+        return [p for reg in self._rooms.values() for p in reg.players()]
+
+
+# One ring per room (D-14); the default room carries TCP / keyless nodes.
+rooms = Rooms()
 
 
 def _drop_player(player: Player, reason: str) -> None:
     """Remove a player from the ring and close its socket (STORY-04). Its own
     handler coroutine then finishes via EOF and logs the disconnect. Idempotent."""
-    registry.remove(player.id)
-    LOG.warning("dropping player %d (%s): %s", player.id, player.peer, reason)
+    reg = rooms.registry(player.room)
+    if reg is not None:
+        reg.remove(player.id)
+    LOG.warning("dropping player %d (%s) in room '%s': %s",
+                player.id, player.peer, player.room, reason)
     try:
         player.conn.close()
     except (ConnectionError, OSError):
@@ -360,23 +401,26 @@ async def _resolve_host(player: Player) -> None:
     player.host = host
 
 
-async def handle_conn(conn: "Conn") -> None:
+async def handle_conn(conn: "Conn", room_key: str = DEFAULT_ROOM) -> None:
     """Per-connection relay, transport-agnostic (EPIC-13 STORY-03): register, relay
     this player's OUT to the next player's IN until EOF, deregister. Hardened
     (STORY-04): keepalive, bounded write buffer, slow-player drop, defensive error
-    handling. The body is identical for a TCP or a WebSocket carrier (D-13)."""
+    handling. The body is identical for a TCP or a WebSocket carrier (D-13).
+
+    EPIC-14: the player joins `room_key`'s ring; the relay, dedup, and telemetry are
+    scoped to that room. TCP and keyless nodes use the default room."""
     conn.tune()
     peer = conn.peer
     ip = conn.ip
+    reg = rooms.get(room_key)  # this room's ring (auto-created for now, STORY-02)
 
-    # Supersede a prior connection from this IP on (re)connect (EPIC-11 STORY-02).
-    # A private LAN address is always one-per-IP (a LAN node = one IP). For ANY IP
-    # class (incl. loopback / NAT, which are exempt from the strict dedup), a
-    # *stalled* prior connection is a dead node that never FIN'd; drop it so the
-    # reconnection doesn't leave a phantom. The reconnection always gets a fresh,
-    # incremented node id.
+    # Supersede a prior connection from this IP on (re)connect (EPIC-11 STORY-02),
+    # within this room. A private LAN address is always one-per-IP (a LAN node = one
+    # IP). For ANY IP class (incl. loopback / NAT, which are exempt from the strict
+    # dedup), a *stalled* prior connection is a dead node that never FIN'd; drop it so
+    # the reconnection doesn't leave a phantom. The reconnection gets a fresh id.
     now = asyncio.get_event_loop().time()
-    for existing in registry.players():
+    for existing in reg.players():
         if existing.ip != ip:
             continue
         if _should_dedup_ip(ip):
@@ -391,16 +435,17 @@ async def handle_conn(conn: "Conn") -> None:
         conn=conn,
         connected_at=now,
         last_active=now,
+        room=room_key,
     )
-    registry.add(player)
+    reg.add(player)
     player.host = ip  # until the reverse-DNS lookup resolves it
     task = asyncio.ensure_future(_resolve_host(player))  # best-effort PTR, off the relay
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
     if _inspect:
         player.inspector = MidiMazeInspector()
-    LOG.info("player %d connected from %s via %s (%d online)",
-             player.id, peer, conn.transport, len(registry))
+    LOG.info("player %d connected from %s via %s, room '%s' (%d in room)",
+             player.id, peer, conn.transport, room_key, len(reg))
 
     try:
         while True:
@@ -411,8 +456,8 @@ async def handle_conn(conn: "Conn") -> None:
             player.last_active = asyncio.get_event_loop().time()
             # Forward this player's OUT bytes to the next player's IN, verbatim
             # (D-02): a dumb relay; the firmware owns the ring (EPIC-09). Single
-            # source per target, so no interleaving.
-            target = registry.next_player(player)
+            # source per target, so no interleaving. Routed within the room.
+            target = reg.next_player(player)
             if player.inspector is not None:  # --inspect: read-only protocol decode
                 LOG.info("inspect p%d(%s) -> p%s: %s | %s", player.id, peer,
                          target.id if target else "-", data.hex(" "),
@@ -441,30 +486,34 @@ async def handle_conn(conn: "Conn") -> None:
     except Exception:  # one bad connection must never take down the server
         LOG.exception("player %d (%s) handler crashed", player.id, peer)
     finally:
-        registry.remove(player.id)
+        reg.remove(player.id)
         conn.close()  # don't await wait_closed(): can hang under shutdown-cancel
         LOG.info(
-            "player %d (%s) disconnected; %d bytes out / %d in (%d online)",
+            "player %d (%s) disconnected; %d bytes out / %d in (room '%s', %d left)",
             player.id,
             peer,
             player.bytes_out,
             player.bytes_in,
-            len(registry),
+            room_key,
+            len(reg),
         )
 
 
 async def handle_player(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
-    """TCP entry point (asyncio.start_server): relay over a raw-TCP carrier."""
-    await handle_conn(TcpConn(reader, writer))
+    """TCP entry point (asyncio.start_server): relay over a raw-TCP carrier in the
+    default room (a TCP node has no handshake to carry a room key, D-14)."""
+    await handle_conn(TcpConn(reader, writer), DEFAULT_ROOM)
 
 
 async def handle_ws(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
     """WebSocket entry point (EPIC-13 STORY-03): run the RFC 6455 server handshake,
-    then relay over a WebSocket carrier in the same ring as the TCP players."""
+    then relay over a WebSocket carrier. EPIC-14: the room key arrives as
+    `Authorization: Bearer <roomkey>`; the connection joins that room's ring (a
+    missing key uses the default room)."""
     try:
         request_line = await reader.readline()
         if not request_line:
@@ -483,12 +532,15 @@ async def handle_ws(
             await writer.drain()
             writer.close()
             return
+        # Room key from Authorization: Bearer <roomkey> (D-14); empty -> default room.
+        auth = headers.get("authorization", "")
+        room_key = _normalize_room(auth[7:]) if auth[:7].lower() == "bearer " else DEFAULT_ROOM
         writer.write(ws.handshake_response(key))
         await writer.drain()
     except (ConnectionError, OSError):
         writer.close()
         return
-    await handle_conn(WsConn(reader, writer))
+    await handle_conn(WsConn(reader, writer), room_key)
 
 
 # --- STORY-03: HTTP status -------------------------------------------------
@@ -496,10 +548,10 @@ async def handle_ws(
 # race-free (single-threaded) — no http.server thread, no locks. Read-only.
 
 
-def _status_snapshot() -> dict:
-    """Race-free status snapshot, read from the asyncio loop. Schema (status.json):
+def _status_snapshot(room: str = DEFAULT_ROOM) -> dict:
+    """Race-free snapshot of one room, read from the asyncio loop. Schema (status.json):
 
-      uptime_s, listen, players_online   server-level fields
+      uptime_s, listen, room, players_online   server + room-level fields
       ring        [player id, ...] in ring order — the relay forwards each node's
                   OUT to the *next* id, wrapping (a lone node echoes to itself)
       players     [ {id, ip, host, peer, transport, connected_s, idle_s, bytes_out,
@@ -510,10 +562,12 @@ def _status_snapshot() -> dict:
 
     The HTML ring view (STORY-05) and any external tooling rely on this shape."""
     now = asyncio.get_event_loop().time()
-    players = registry.players()
+    reg = rooms.registry(room)
+    players = reg.players() if reg is not None else []
     return {
         "uptime_s": int(now - _started_at),
         "listen": _listen_addr,
+        "room": room,
         "players_online": len(players),
         "ring": [p.id for p in players],  # ring order = insertion order, wraps
         "players": [
@@ -696,8 +750,9 @@ async def serve(host: str, port: int, http_port: int, enable_http: bool = True,
         # `await server.wait_closed()`: on Python 3.13+ that blocks until every
         # active connection closes, which hangs shutdown while a player (the RP)
         # sits idle in reader.read().
-        LOG.info("shutting down; closing %d player connection(s)", len(registry))
-        for player in registry.players():
+        active = rooms.all_players()
+        LOG.info("shutting down; closing %d player connection(s)", len(active))
+        for player in active:
             try:
                 player.conn.close()
             except (ConnectionError, OSError):

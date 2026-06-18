@@ -2,7 +2,7 @@
 id: STORY-02
 epic: EPIC-14
 title: Orchestrator per-room rings (default room + WS room routing)
-status: todo
+status: done
 ---
 
 ## Goal
@@ -13,12 +13,12 @@ relay stays within a room.
 
 ## Tasks
 
-- [ ] Introduce a room registry mapping a normalized room key to its own `Registry` (one ring each), replacing the single global registry; `next_player` and the relay operate within a node's room
-- [ ] Parse `Authorization: Bearer <key>` in `handle_ws`, normalize the key (uppercase), and assign the connection to that room
-- [ ] Route TCP connections and WS connections with no room key to the default room (preserves today's single-ring behavior)
-- [ ] Keep per-connection dedup, reconnection recycling, and telemetry scoped to the room
-- [ ] Auto-create a room on first join for now (a stub); STORY-03 switches this to pre-provisioned with reject-unknown
-- [ ] selftest: two WS nodes in room A relay to each other byte-exact; a node in room B receives none of room A's traffic (isolation)
+- [x] Introduce a room registry mapping a normalized room key to its own `Registry` (one ring each), replacing the single global registry; `next_player` and the relay operate within a node's room
+- [x] Parse `Authorization: Bearer <key>` in `handle_ws`, normalize the key (uppercase), and assign the connection to that room
+- [x] Route TCP connections and WS connections with no room key to the default room (preserves today's single-ring behavior)
+- [x] Keep per-connection dedup, reconnection recycling, and telemetry scoped to the room
+- [x] Auto-create a room on first join for now (a stub); STORY-03 switches this to pre-provisioned with reject-unknown
+- [x] selftest: two WS nodes in room A relay to each other byte-exact; a node in room B receives none of room A's traffic (isolation)
 
 ## Acceptance
 

@@ -105,16 +105,20 @@ def server(port: int, http_port: int, *extra: str):
             proc.kill()
 
 
-def ws_connect(port: int) -> "tuple[socket.socket, bool]":
+def ws_connect(port: int, room: str = "") -> "tuple[socket.socket, bool]":
     """Open a TCP socket and run the RFC 6455 client handshake. Returns the socket
-    and whether the server answered 101 with the right Sec-WebSocket-Accept."""
+    and whether the server answered 101 with the right Sec-WebSocket-Accept. An
+    optional room key is sent as Authorization: Bearer (EPIC-14)."""
     s = socket.create_connection((HOST, port))
     s.settimeout(2.0)
     key = base64.b64encode(os.urandom(16)).decode("ascii")
+    auth = f"Authorization: Bearer {room}\r\n" if room else ""
     s.sendall(
-        f"GET / HTTP/1.1\r\nHost: {HOST}:{port}\r\nUpgrade: websocket\r\n"
-        f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
-        f"Sec-WebSocket-Version: 13\r\n\r\n".encode("latin-1")
+        (
+            f"GET / HTTP/1.1\r\nHost: {HOST}:{port}\r\nUpgrade: websocket\r\n"
+            f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+            f"{auth}Sec-WebSocket-Version: 13\r\n\r\n"
+        ).encode("latin-1")
     )
     buf = b""
     while b"\r\n\r\n" not in buf:
@@ -305,11 +309,46 @@ def main() -> int:
               len(st2["players"]) == 1 and st2["players"][0]["transport"] == "tcp")
         t.close()
 
+    # Phase F — private rooms (EPIC-14 STORY-02): WS nodes that present the same
+    # room key (Authorization: Bearer) share a ring; a different room is isolated.
+    with server(5089, 8089, "--ws", "--ws-port", "5088"):
+        print("private rooms (per-room rings):")
+        a1, ok1 = ws_connect(5088, room="ALPHA")
+        a2, ok2 = ws_connect(5088, room="ALPHA")
+        b1, okb = ws_connect(5088, room="BETA")
+        check("room handshakes completed", ok1 and ok2 and okb)
+        da2 = ws.FrameDecoder()
+        db1 = ws.FrameDecoder()
+        time.sleep(0.3)
+
+        # Same room: a1's OUT reaches a2's IN.
+        ws_send(a1, b"\x11\x22\x33")
+        check("same-room relay (ALPHA: a1 -> a2)", ws_recv(a2, da2, 3) == b"\x11\x22\x33")
+
+        # Cross-room isolation: the BETA node sees none of ALPHA's traffic.
+        b1.settimeout(0.5)
+        leaked = b""
+        try:
+            for op, pl in db1.feed(b1.recv(4096)):
+                if op in (ws.OP_BINARY, ws.OP_CONT):
+                    leaked += pl
+        except (socket.timeout, OSError):
+            pass
+        check("cross-room isolation (BETA sees no ALPHA traffic)", leaked == b"")
+
+        # The other room is its own ring (a lone node echoes to itself).
+        ws_send(b1, b"\x99")
+        check("other room is its own ring (BETA echoes to self)",
+              ws_recv(b1, db1, 1) == b"\x99")
+        a1.close()
+        a2.close()
+        b1.close()
+
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")
         return 1
-    print("PASS: orchestrator relay + IP-dedup + --inspect decoder + ws codec + mixed ring")
+    print("PASS: orchestrator relay + IP-dedup + --inspect decoder + ws codec + mixed ring + rooms")
     return 0
 
 
