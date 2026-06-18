@@ -11,6 +11,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 2 | Transport redesign, HW re-validation + orchestrator revamp | done |
 | 3 | Hardware test pass: ST + Hatari verification checklist | in progress |
 | 4 | Optional WebSocket transport (TCP or WebSocket) | done |
+| 5 | Private rooms (room-key MIDI rings) | done |
 
 ---
 
@@ -121,3 +122,34 @@ transports play MIDI Maze on real hardware. One regression surfaced and was fixe
 disconnect-removal change that dropped a peer on a transient relay write error collapsed
 a 2-node ring into a self-echo flood, which slowed both carriers until it was reverted to
 the tolerant relay. `wss` / TLS stays deferred (the RP has no mbedTLS linked).
+
+---
+
+## Iteration 5: Private rooms
+
+**Goal:** split the single global ring into multiple private rings keyed by a human-typed
+room key, so groups of players get their own isolated MIDI Maze ring. A WebSocket node
+carries its room key in the handshake (`Authorization: Bearer`), the orchestrator routes it
+to that room's ring, and rooms are pre-provisioned by an operator through a small REST API
+(admin-key for writes) so an unknown key is refused. The web view gains a room selector. A
+plain-TCP node joins a default room, and the key gates a ring rather than securing traffic
+(no TLS; put it behind a reverse proxy if exposed).
+
+**Epics**
+
+| Epic | Status | Note |
+| --- | --- | --- |
+| EPIC-14 · Private rooms | done | per-room rings + REST provisioning (admin-key), `Authorization: Bearer` room key on WS, room lifecycle (16-cap, auto-codes, TTL) + persistence, per-room phase/master + lobby page, firmware `[R]oom` menu + gateway `--room` |
+
+**Outcome:** EPIC-14 landed: one orchestrator now hosts many private rings keyed by a
+human-typed room key. A WebSocket node carries its key as `Authorization: Bearer`; the
+orchestrator routes it to that room's ring, with a plain-TCP node on the default ring.
+Rooms are pre-provisioned over a small REST API (admin-key for writes, unknown keys
+refused), each ring caps at 16 players, empty rooms are reaped on a TTL, and the
+provisioned set persists across restarts. The web view scopes to one room with a selector,
+a lobby lists every room with its player count and game phase, and the master node is
+badged from the read-only inspector. The Hatari gateway joins with `--room` and the
+firmware with a `[R]oom` boot-menu entry. Validated on real hardware (two isolated rooms,
+ST + Hatari). Two browser/bench bugs were found and fixed along the way: the room dropdown
+built SVG-namespaced options, and the menu Server line froze after a config-edit reconnect.
+**Iteration complete.**

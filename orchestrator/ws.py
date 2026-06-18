@@ -49,16 +49,19 @@ def handshake_response(key: str) -> bytes:
     ).encode("ascii")
 
 
-def client_handshake_request(host: str, path: str, key: str) -> bytes:
+def client_handshake_request(host: str, path: str, key: str, room: str = "") -> bytes:
     """The client GET Upgrade request for a server handshake (EPIC-13 STORY-04/06).
     The caller supplies a base64 Sec-WebSocket-Key (16 random bytes); key generation
-    stays with the caller so this module needs no random-number import."""
+    stays with the caller so this module needs no random-number import. A non-empty
+    `room` is sent as Authorization: Bearer to join a private room (EPIC-14)."""
+    auth = f"Authorization: Bearer {room}\r\n" if room else ""
     return (
         f"GET {path} HTTP/1.1\r\n"
         f"Host: {host}\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         f"Sec-WebSocket-Key: {key}\r\n"
+        f"{auth}"
         "Sec-WebSocket-Version: 13\r\n"
         "\r\n"
     ).encode("latin-1")

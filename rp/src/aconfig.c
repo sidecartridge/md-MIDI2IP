@@ -14,6 +14,7 @@ static SettingsConfigEntry defaultEntries[] = {
     {MIDI_CFG_TRANSPORT, SETTINGS_TYPE_STRING, MIDI_DEFAULT_TRANSPORT},
     {MIDI_CFG_WS_PORT, SETTINGS_TYPE_INT, "5006"},
     {MIDI_CFG_WS_PATH, SETTINGS_TYPE_STRING, MIDI_DEFAULT_WS_PATH},
+    {MIDI_CFG_ROOM, SETTINGS_TYPE_STRING, ""},  // play-room key (EPIC-14); empty = default ring
 };
 
 // Create a global context for our settings

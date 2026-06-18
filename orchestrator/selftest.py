@@ -23,7 +23,9 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
@@ -105,16 +107,35 @@ def server(port: int, http_port: int, *extra: str):
             proc.kill()
 
 
-def ws_connect(port: int) -> "tuple[socket.socket, bool]":
+def http_req(http_port: int, method: str, path: str, body: "bytes | None" = None,
+             headers: "dict | None" = None) -> "tuple[int, bytes]":
+    """REST helper: returns (status_code, body). HTTP errors return their code too."""
+    req = urllib.request.Request(
+        f"http://{HOST}:{http_port}{path}", data=body, method=method
+    )
+    for name, value in (headers or {}).items():
+        req.add_header(name, value)
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+def ws_connect(port: int, room: str = "") -> "tuple[socket.socket, bool]":
     """Open a TCP socket and run the RFC 6455 client handshake. Returns the socket
-    and whether the server answered 101 with the right Sec-WebSocket-Accept."""
+    and whether the server answered 101 with the right Sec-WebSocket-Accept. An
+    optional room key is sent as Authorization: Bearer (EPIC-14)."""
     s = socket.create_connection((HOST, port))
     s.settimeout(2.0)
     key = base64.b64encode(os.urandom(16)).decode("ascii")
+    auth = f"Authorization: Bearer {room}\r\n" if room else ""
     s.sendall(
-        f"GET / HTTP/1.1\r\nHost: {HOST}:{port}\r\nUpgrade: websocket\r\n"
-        f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
-        f"Sec-WebSocket-Version: 13\r\n\r\n".encode("latin-1")
+        (
+            f"GET / HTTP/1.1\r\nHost: {HOST}:{port}\r\nUpgrade: websocket\r\n"
+            f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+            f"{auth}Sec-WebSocket-Version: 13\r\n\r\n"
+        ).encode("latin-1")
     )
     buf = b""
     while b"\r\n\r\n" not in buf:
@@ -305,11 +326,191 @@ def main() -> int:
               len(st2["players"]) == 1 and st2["players"][0]["transport"] == "tcp")
         t.close()
 
+    # Phase F — private rooms (EPIC-14 STORY-02): WS nodes that present the same
+    # room key (Authorization: Bearer) share a ring; a different room is isolated.
+    # Rooms are pre-provisioned over REST (STORY-03), so create them first.
+    with server(5089, 8089, "--ws", "--ws-port", "5088", "--admin-key", "K"):
+        print("private rooms (per-room rings):")
+        for r in ("ALPHA", "BETA"):
+            http_req(8089, "POST", "/rooms",
+                     json.dumps({"key": r}).encode(), {"X-Admin-Key": "K"})
+        a1, ok1 = ws_connect(5088, room="ALPHA")
+        a2, ok2 = ws_connect(5088, room="ALPHA")
+        b1, okb = ws_connect(5088, room="BETA")
+        check("room handshakes completed", ok1 and ok2 and okb)
+        da2 = ws.FrameDecoder()
+        db1 = ws.FrameDecoder()
+        time.sleep(0.3)
+
+        # Same room: a1's OUT reaches a2's IN.
+        ws_send(a1, b"\x11\x22\x33")
+        check("same-room relay (ALPHA: a1 -> a2)", ws_recv(a2, da2, 3) == b"\x11\x22\x33")
+
+        # Cross-room isolation: the BETA node sees none of ALPHA's traffic.
+        b1.settimeout(0.5)
+        leaked = b""
+        try:
+            for op, pl in db1.feed(b1.recv(4096)):
+                if op in (ws.OP_BINARY, ws.OP_CONT):
+                    leaked += pl
+        except (socket.timeout, OSError):
+            pass
+        check("cross-room isolation (BETA sees no ALPHA traffic)", leaked == b"")
+
+        # The other room is its own ring (a lone node echoes to itself).
+        ws_send(b1, b"\x99")
+        check("other room is its own ring (BETA echoes to self)",
+              ws_recv(b1, db1, 1) == b"\x99")
+        a1.close()
+        a2.close()
+        b1.close()
+
+    # Phase G — room provisioning over REST (EPIC-14 STORY-03): admin-guarded
+    # writes, reject-unknown on join, list, and delete.
+    with server(5085, 8085, "--ws", "--ws-port", "5084", "--admin-key", "SECRET"):
+        print("room provisioning (REST):")
+        code, _ = http_req(8085, "POST", "/rooms", b'{"key":"ALPHA"}')
+        check("POST without admin key refused (403)", code == 403)
+        code, _ = http_req(8085, "POST", "/rooms", b'{"key":"ALPHA"}',
+                           {"X-Admin-Key": "SECRET"})
+        check("POST with admin key creates the room", code == 200)
+        code, body = http_req(8085, "GET", "/rooms")
+        check("GET /rooms lists the new room",
+              code == 200 and any(r["room"] == "ALPHA"
+                                  for r in json.loads(body)["rooms"]))
+        a, oka = ws_connect(5084, room="ALPHA")
+        check("join a provisioned room succeeds", oka)
+        g, okg = ws_connect(5084, room="GHOST")
+        check("join an unprovisioned room is refused", not okg)
+        a.close()
+        try:
+            g.close()
+        except OSError:
+            pass
+        code, _ = http_req(8085, "DELETE", "/rooms/ALPHA", None, {"X-Admin-Key": "SECRET"})
+        check("DELETE with admin key removes the room", code == 200)
+        code, body = http_req(8085, "GET", "/rooms")
+        check("deleted room no longer listed",
+              all(r["room"] != "ALPHA" for r in json.loads(body)["rooms"]))
+
+    # Phase H — room lifecycle (EPIC-14 STORY-04): 16-player cap, auto codes,
+    # empty-room TTL reaper. A short --room-ttl keeps the reaper test fast.
+    with server(5083, 8083, "--ws", "--ws-port", "5082", "--admin-key", "K",
+                "--room-ttl", "1"):
+        print("room lifecycle (cap / auto-code / TTL):")
+        http_req(8083, "POST", "/rooms", b'{"key":"FULL"}', {"X-Admin-Key": "K"})
+        socks = []
+        for _ in range(16):
+            s, ok = ws_connect(5082, room="FULL")
+            if ok:
+                socks.append(s)
+        time.sleep(0.5)
+        _, body = http_req(8083, "GET", "/rooms")
+        cnt = next((r["players"] for r in json.loads(body)["rooms"] if r["room"] == "FULL"), 0)
+        check("room fills to the 16-player cap", len(socks) == 16 and cnt == 16)
+        s17, ok17 = ws_connect(5082, room="FULL")
+        check("the 17th join is refused (cap)", not ok17)
+        for s in socks:
+            s.close()
+        try:
+            s17.close()
+        except OSError:
+            pass
+
+        # Auto-generated code: POST with no key returns a usable room code.
+        code, body = http_req(8083, "POST", "/rooms", b"", {"X-Admin-Key": "K"})
+        auto = json.loads(body).get("room", "")
+        check("POST with no key mints a room code", code == 200 and 1 <= len(auto) <= 16)
+        ac, okac = ws_connect(5082, room=auto)
+        check("the auto code is joinable", okac)
+        ac.close()
+
+        # Empty-room TTL: a used room that empties is reaped (ttl=1s).
+        http_req(8083, "POST", "/rooms", b'{"key":"TEMP"}', {"X-Admin-Key": "K"})
+        tmp, oktmp = ws_connect(5082, room="TEMP")
+        check("temp room joinable before reap", oktmp)
+        tmp.close()  # room TEMP is now used and empty
+        time.sleep(3.5)
+        _, body = http_req(8083, "GET", "/rooms")
+        check("empty used room is reaped after the TTL",
+              all(r["room"] != "TEMP" for r in json.loads(body)["rooms"]))
+
+    # Phase I — room-aware status + UI (EPIC-14 STORY-06): status.json?room scopes
+    # to a room, the default room is separate, and the page carries a room selector.
+    with server(5081, 8081, "--ws", "--ws-port", "5080", "--admin-key", "K"):
+        print("room-aware status + UI:")
+        http_req(8081, "POST", "/rooms", b'{"key":"ALPHA"}', {"X-Admin-Key": "K"})
+        wsa = ws_connect(5080, room="ALPHA")[0]
+        tcp = conn(5081)  # TCP node -> default room
+        time.sleep(0.3)
+        sj_a = json.loads(http_req(8081, "GET", "/status.json?room=ALPHA")[1])
+        check("status.json?room scopes to the room",
+              sj_a["room"] == "ALPHA" and sj_a["players_online"] == 1)
+        sj_d = json.loads(http_req(8081, "GET", "/status.json")[1])
+        check("status.json with no param is the default room",
+              sj_d["room"] == "" and sj_d["players_online"] == 1)
+        page = http_req(8081, "GET", "/")[1].decode("utf-8")
+        check("ring view has a room selector polling rooms",
+              "<select id='room'" in page and "fetch('rooms'" in page)
+        check("room options use HTML createElement (not the SVG el helper)",
+              "document.createElement('option')" in page and "el('option'" not in page)
+        wsa.close()
+        tcp.close()
+
+    # Phase J — room persistence across restart (EPIC-14 STORY-05).
+    rooms_file = os.path.join(tempfile.mkdtemp(prefix="midi-rooms-"), "rooms.json")
+    with server(5079, 8079, "--admin-key", "K", "--rooms-file", rooms_file):
+        print("room persistence (restart):")
+        code, _ = http_req(8079, "POST", "/rooms", b'{"key":"SAVED"}', {"X-Admin-Key": "K"})
+        check("room created before restart", code == 200)
+    # New server (different ports) sharing the same rooms file: the room is restored.
+    with server(5076, 8076, "--ws", "--ws-port", "5075", "--admin-key", "K",
+                "--rooms-file", rooms_file):
+        _, body = http_req(8076, "GET", "/rooms")
+        check("room restored after restart",
+              any(r["room"] == "SAVED" for r in json.loads(body)["rooms"]))
+        sav, oksav = ws_connect(5075, room="SAVED")
+        check("restored room is joinable", oksav)
+        sav.close()
+    # A missing rooms file starts clean (no crash).
+    missing = os.path.join(tempfile.mkdtemp(prefix="midi-rooms-"), "none.json")
+    with server(5074, 8074, "--admin-key", "K", "--rooms-file", missing):
+        code, body = http_req(8074, "GET", "/rooms")
+        check("missing rooms file starts clean",
+              code == 200 and all(r["room"] != "SAVED"
+                                  for r in json.loads(body)["rooms"]))
+
+    # Phase K — per-room observability (EPIC-14 STORY-07): phase + master from the
+    # read-only inspector, /rooms phase, and the lobby page.
+    with server(5073, 8073, "--ws", "--ws-port", "5072", "--admin-key", "K"):
+        print("per-room observability (phase / master / lobby):")
+        http_req(8073, "POST", "/rooms", b'{"key":"PLAY"}', {"X-Admin-Key": "K"})
+        a, oka = ws_connect(5072, room="PLAY")
+        time.sleep(0.3)
+        ws_send(a, b"\x80\x02")  # COUNT-PLAYERS-start + count -> master + counting
+        time.sleep(0.3)
+        sj = json.loads(http_req(8073, "GET", "/status.json?room=PLAY")[1])
+        pid = sj["players"][0]["id"] if sj["players"] else None
+        check("room phase reflects COUNT-PLAYERS", sj["phase"] == "counting")
+        check("room reports the master node", pid is not None and sj["master"] == pid)
+        _, rb = http_req(8073, "GET", "/rooms")
+        check("/rooms carries the per-room phase",
+              any(r["room"] == "PLAY" and r["phase"] == "counting"
+                  for r in json.loads(rb)["rooms"]))
+        ws_send(a, b"\x84")  # START-GAME -> in-game
+        time.sleep(0.3)
+        sj2 = json.loads(http_req(8073, "GET", "/status.json?room=PLAY")[1])
+        check("room phase reaches in-game", sj2["phase"] == "in-game")
+        page = http_req(8073, "GET", "/lobby")[1].decode("utf-8")
+        check("lobby page lists rooms",
+              "MIDI-to-IP rooms" in page and "fetch('rooms'" in page)
+        a.close()
+
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")
         return 1
-    print("PASS: orchestrator relay + IP-dedup + --inspect decoder + ws codec + mixed ring")
+    print("PASS: orchestrator relay + IP-dedup + --inspect + ws codec + mixed ring + rooms + REST")
     return 0
 
 
