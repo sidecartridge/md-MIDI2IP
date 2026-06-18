@@ -506,6 +506,29 @@ def main() -> int:
               "MIDI-to-IP rooms" in page and "fetch('rooms'" in page)
         a.close()
 
+    # Phase L — a drop leaves nothing queued (EPIC-15 STORY-02): after a node
+    # drops, a node joining the same room sees only post-join traffic, no replay.
+    with server(5071, 8071, "--ws", "--ws-port", "5070", "--admin-key", "K"):
+        print("drop leaves nothing queued (no replay):")
+        http_req(8071, "POST", "/rooms", b'{"key":"DROP"}', {"X-Admin-Key": "K"})
+        a, _ = ws_connect(5070, room="DROP")
+        b, _ = ws_connect(5070, room="DROP")
+        bdec = ws.FrameDecoder()
+        time.sleep(0.3)
+        ws_send(a, b"\x10\x11\x12")  # A -> B (ring order A,B)
+        check("pre-drop byte reaches the peer", ws_recv(b, bdec, 3) == b"\x10\x11\x12")
+        a.close()  # A leaves the room
+        time.sleep(0.4)
+        c, okc = ws_connect(5070, room="DROP")  # a new node joins the same room
+        cdec = ws.FrameDecoder()
+        check("a new node joins after the drop", okc)
+        time.sleep(0.3)
+        ws_send(b, b"\x77")  # B -> its next, now C
+        check("the new node gets only post-join bytes (no replay)",
+              ws_recv(c, cdec, 1) == b"\x77")
+        b.close()
+        c.close()
+
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")

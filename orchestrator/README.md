@@ -71,3 +71,10 @@ The server enforces one connection per private IP within a room. A reconnect fro
 IP supersedes the prior connection when that connection is a private-LAN node or has
 stalled, and the reconnection takes a fresh node id. TCP keepalive plus a slow-player drop
 keep one stuck node from freezing the ring.
+
+On a disconnect, the orchestrator holds nothing to replay: it relays directly (no per-player
+byte queue), the per-connection write buffer is bounded and discarded when the socket
+closes, and the WebSocket frame decoder state is dropped with the connection. So a node
+joining later sees only traffic sent after it joined. The firmware does its part too: it
+flushes both its IN and OUT queues on a link drop (EPIC-15), so a reconnect cannot replay
+pre-drop bytes.

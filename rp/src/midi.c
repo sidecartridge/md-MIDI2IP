@@ -162,7 +162,24 @@ static void midi_net_flush_in_queue(void) {
   midi_in_publish();
 }
 
-// Drop the PCB, flush stale IN bytes, and go DOWN. Safe from any callback.
+// Defined in the WS block below (needs midiWsDec / midiWsHsLen).
+static void midi_ws_reset_rx(void);
+
+// EPIC-15 STORY-01: drop ALL pending bytes (IN and OUT) and reset the WS receive
+// state on a link drop, so a reconnect within the stale window cannot replay
+// pre-drop traffic. Previously only the IN queue was flushed, leaving queued OUT
+// bytes to be sent on the next connection (until the 1 s stale cleanup). Re-stamp
+// the staleness timestamps so the cleanup logic stays consistent.
+static void midi_net_flush_all(void) {
+  midi_net_flush_in_queue();
+  midiOutTail = midiOutHead;  // drop queued OUT bytes too
+  midiInLastDrain = get_absolute_time();
+  midiOutLastDrain = get_absolute_time();
+  midi_ws_reset_rx();
+}
+
+// Drop the PCB, flush stale IN/OUT bytes + WS state, and go DOWN. Safe from any
+// callback.
 static void midi_net_reset(void) {
   if (midiNetPcb != NULL) {
     tcp_arg(midiNetPcb, NULL);
@@ -174,7 +191,7 @@ static void midi_net_reset(void) {
     }
     midiNetPcb = NULL;
   }
-  midi_net_flush_in_queue();
+  midi_net_flush_all();
   midiNetState = MIDI_NET_DOWN;
 }
 
@@ -209,6 +226,13 @@ static char midiWsKey[32];           // base64 client nonce (24 chars) + NUL
 static midi_ws_decoder midiWsDec;    // streaming server->client frame decoder
 static uint8_t midiWsHsBuf[512];     // handshake (101) response accumulator
 static uint16_t midiWsHsLen = 0;
+
+// EPIC-15 STORY-01: reset the WS receive state so a reconnect starts clean (no
+// partial frame or stale handshake bytes carried across a drop).
+static void midi_ws_reset_rx(void) {
+  midi_ws_decoder_init(&midiWsDec);
+  midiWsHsLen = 0;
+}
 
 static void midi_net_mark_up(void) {
   midiNetState = MIDI_NET_UP;
@@ -397,7 +421,7 @@ static void midi_net_err_cb(void *arg, err_t err) {
   (void)arg;
   // lwIP has already freed the PCB on error.
   midiNetPcb = NULL;
-  midi_net_flush_in_queue();
+  midi_net_flush_all();  // EPIC-15: drop IN + OUT + WS state on the error drop too
   midiNetState = MIDI_NET_DOWN;
   DPRINTF("MIDI net: error %d -> down\n", err);
 }
