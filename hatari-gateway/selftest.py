@@ -164,8 +164,10 @@ def test_websocket() -> None:
         c_raw.close()
         s_raw.close()
 
-    # Handshake: a fake server completes the RFC 6455 upgrade.
+    # Handshake (with a room): a fake server completes the RFC 6455 upgrade and the
+    # client carries the room key as Authorization: Bearer (EPIC-14 STORY-08).
     c2, s2 = socket.socketpair()
+    captured = {}
     try:
         def fake_server() -> None:
             req = b""
@@ -174,14 +176,17 @@ def test_websocket() -> None:
                 if not part:
                     return
                 req += part
+            captured["req"] = req
             hdrs = ws.parse_headers(req.split(b"\r\n\r\n")[0])
             s2.sendall(ws.handshake_response(hdrs["sec-websocket-key"]))
 
         th = threading.Thread(target=fake_server, daemon=True)
         th.start()
-        wrapped = gateway.ws_handshake(c2, "127.0.0.1", 5006, "/")
+        wrapped = gateway.ws_handshake(c2, "127.0.0.1", 5006, "/", "DIEGOROOM")
         th.join(timeout=2)
         check("ws_handshake returns a framed socket", isinstance(wrapped, gateway._WsSocket))
+        check("handshake carries the room as Authorization: Bearer",
+              b"Authorization: Bearer DIEGOROOM\r\n" in captured.get("req", b""))
         wrapped.sendall(b"\x55")
         check("post-handshake client frame decodes",
               ws.FrameDecoder().feed(s2.recv(4096)) == [(ws.OP_BINARY, b"\x55")])

@@ -2,7 +2,7 @@
 id: STORY-08
 epic: EPIC-14
 title: Hatari gateway room key (--room)
-status: todo
+status: done
 ---
 
 ## Goal
@@ -11,11 +11,11 @@ A Hatari node joins a room with `--room` over WebSocket.
 
 ## Tasks
 
-- [ ] Add `--room <key>` to `gateway.py` (used with `--transport ws`)
-- [ ] Send `Authorization: Bearer <key>` in the gateway WS handshake (`ws_handshake`) when a room is set
-- [ ] Normalize the key to uppercase so it matches the orchestrator and the firmware
-- [ ] Document that `--room` needs `--transport ws`; a tcp gateway uses the default room
-- [ ] selftest: the gateway handshake request carries the `Authorization: Bearer` header with the normalized room
+- [x] Add `--room <key>` to `gateway.py` (used with `--transport ws`)
+- [x] Send `Authorization: Bearer <key>` in the gateway WS handshake (`ws_handshake`) when a room is set
+- [x] Normalize the key to uppercase so it matches the orchestrator and the firmware
+- [x] Document that `--room` needs `--transport ws`; a tcp gateway uses the default room
+- [x] selftest: the gateway handshake request carries the `Authorization: Bearer` header with the normalized room
 
 ## Acceptance
 

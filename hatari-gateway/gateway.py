@@ -147,12 +147,14 @@ class _WsSocket:
         self._sock.close()
 
 
-def ws_handshake(sock: socket.socket, host: str, port: int, path: str = "/") -> _WsSocket:
+def ws_handshake(sock: socket.socket, host: str, port: int, path: str = "/",
+                 room: str = "") -> _WsSocket:
     """Run the RFC 6455 client handshake on a connected socket and return a framed
-    wrapper. Raises ConnectionError if the server does not answer 101 with the
-    expected Sec-WebSocket-Accept."""
+    wrapper. A non-empty `room` joins that private ring via Authorization: Bearer
+    (EPIC-14). Raises ConnectionError if the server does not answer 101 with the
+    expected Sec-WebSocket-Accept (e.g. an unknown or full room is refused)."""
     key = base64.b64encode(os.urandom(16)).decode("ascii")
-    sock.sendall(ws.client_handshake_request(f"{host}:{port}", path, key))
+    sock.sendall(ws.client_handshake_request(f"{host}:{port}", path, key, room))
     sock.settimeout(5.0)
     buf = b""
     while b"\r\n\r\n" not in buf:
@@ -234,7 +236,16 @@ def main() -> None:
     parser.add_argument(
         "--ws-path", default="/", help="WebSocket request path when --transport ws (default: /)",
     )
+    parser.add_argument(
+        "--room", default="",
+        help="join a private room (EPIC-14): needs --transport ws. Sent as "
+             "Authorization: Bearer. Empty joins the default ring.",
+    )
     args = parser.parse_args()
+    room = args.room.strip().upper()  # normalize to match the orchestrator + firmware
+    if room and args.transport != "ws":
+        print("note: --room needs --transport ws; ignoring it on a tcp connection")
+        room = ""
 
     out_path, in_path = create_fifos(args.dir)
     print("FIFOs ready:")
@@ -248,11 +259,12 @@ def main() -> None:
         print("waiting for Hatari to open the MIDI FIFOs ... (Ctrl-C to quit)")
         out_fd, in_fd = open_fifos(out_path, in_path)
         print("connected to Hatari.")
-        print(f"connecting to orchestrator {args.host}:{args.port} ({args.transport}) ...")
+        where = f"{args.transport}" + (f", room {room}" if room else "")
+        print(f"connecting to orchestrator {args.host}:{args.port} ({where}) ...")
         sock = socket.create_connection((args.host, args.port))
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         if args.transport == "ws":
-            sock = ws_handshake(sock, args.host, args.port, args.ws_path)
+            sock = ws_handshake(sock, args.host, args.port, args.ws_path, room)
         print("connected to orchestrator — bridging. (reconnect is STORY-03)")
         bridge(out_fd, in_fd, sock)
         print("bridge ended (a side disconnected).")
