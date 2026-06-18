@@ -2,7 +2,7 @@
 id: STORY-07
 epic: EPIC-14
 title: Per-room observability (game phase, master badge, lobby page)
-status: todo
+status: done
 ---
 
 ## Goal
@@ -12,11 +12,11 @@ every room at a glance.
 
 ## Tasks
 
-- [ ] Run a per-room `MidiMazeInspector` off the relay path (read-only, D-02) to derive a room phase (idle / electing / counting / in-game) and the current master node
-- [ ] Add `phase` and `master` to the room's `status.json` and a per-room summary (count, cap, phase) to `/rooms`
-- [ ] Ring view: badge the room's phase and highlight the master node
-- [ ] Lobby page: a top-level page listing every room with its player count, cap, and phase, linking into each room's ring view
-- [ ] selftest: feed a known byte sequence and the room's phase + master are reported; `/rooms` carries per-room phase and counts; the lobby page lists rooms and links to the ring view
+- [x] Run a per-room `MidiMazeInspector` off the relay path (read-only, D-02) to derive a room phase (idle / electing / counting / in-game) and the current master node
+- [x] Add `phase` and `master` to the room's `status.json` and a per-room summary (count, cap, phase) to `/rooms`
+- [x] Ring view: badge the room's phase and highlight the master node
+- [x] Lobby page: a top-level page listing every room with its player count, cap, and phase, linking into each room's ring view
+- [x] selftest: feed a known byte sequence and the room's phase + master are reported; `/rooms` carries per-room phase and counts; the lobby page lists rooms and links to the ring view
 
 ## Acceptance
 

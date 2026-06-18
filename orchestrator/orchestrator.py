@@ -87,6 +87,10 @@ class MidiMazeInspector:
         self._state = "normal"
         self._fixed_left = 0
         self._in_game = False
+        # EPIC-14 STORY-07: a coarse phase for the room view, plus whether this
+        # stream emitted COUNT-PLAYERS-start (the master sends it). Read-only.
+        self.phase = "idle"  # idle | electing | counting | in-game
+        self.elected_master = False
 
     def feed(self, data: bytes) -> "list[str]":
         events: "list[str]" = []
@@ -112,22 +116,33 @@ class MidiMazeInspector:
             return []
         if b == _MM_COUNT_PLAYERS:
             self._state = "expect_count"
+            self.phase = "counting"
+            self.elected_master = True  # the master sends COUNT-PLAYERS-start
             return ["COUNT-PLAYERS-start"]  # designate master NOW, not after the count byte
         if b == _MM_RESET_SCORE:
             return ["RESET-SCORE"]
         if b == _MM_TERMINATE_GAME:
+            self.phase = "idle"
+            self.elected_master = False
+            self._in_game = False
             return ["TERMINATE-GAME"]
         if b == _MM_SEND_DATA:
             self._state = "send_data_name"
+            self.phase = "in-game"
             return ["SEND-DATA(start)"]
         if b == _MM_START_GAME:
+            self.phase = "in-game"
             return ["START-GAME"]
         if b == _MM_ABOUT:
             return ["ABOUT"]
         if b == _MM_NAME_DIALOG:
             return ["NAME-DIALOG"]
         if b == _MM_MASTER_ELECT:
-            return [f"JOYSTICK({_mm_joystick(b)})"] if self._in_game else ["MASTER-ELECT"]
+            if self._in_game:
+                return [f"JOYSTICK({_mm_joystick(b)})"]
+            if self.phase == "idle":
+                self.phase = "electing"
+            return ["MASTER-ELECT"]
         return [f"JOYSTICK({_mm_joystick(b)})"] if self._in_game else [f"byte(0x{b:02x})"]
 
 
@@ -460,9 +475,10 @@ class Rooms:
         return self._rooms.get(key)
 
     def summaries(self) -> "list[dict]":
-        """A per-room summary for GET /rooms (room key + player count + cap)."""
+        """A per-room summary for GET /rooms (room key + player count + cap + phase)."""
         return [
-            {"room": k, "players": len(r), "cap": MAX_PLAYERS_PER_ROOM}
+            {"room": k, "players": len(r), "cap": MAX_PLAYERS_PER_ROOM,
+             "phase": _room_observe(r)[0]}
             for k, r in self._rooms.items()
         ]
 
@@ -568,8 +584,9 @@ async def handle_conn(conn: "Conn", room_key: str = DEFAULT_ROOM) -> None:
     task = asyncio.ensure_future(_resolve_host(player))  # best-effort PTR, off the relay
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
-    if _inspect:
-        player.inspector = MidiMazeInspector()
+    # Always-on, read-only decoder: drives the per-room phase + master badge
+    # (STORY-07); the per-byte log is gated by --inspect.
+    player.inspector = MidiMazeInspector()
     LOG.info("player %d connected from %s via %s, room '%s' (%d in room)",
              player.id, peer, conn.transport, room_key, len(reg))
 
@@ -584,10 +601,11 @@ async def handle_conn(conn: "Conn", room_key: str = DEFAULT_ROOM) -> None:
             # (D-02): a dumb relay; the firmware owns the ring (EPIC-09). Single
             # source per target, so no interleaving. Routed within the room.
             target = reg.next_player(player)
-            if player.inspector is not None:  # --inspect: read-only protocol decode
+            events = player.inspector.feed(data)  # always-on: room phase/master
+            if _inspect:  # --inspect: also log the decoded events per chunk
                 LOG.info("inspect p%d(%s) -> p%s: %s | %s", player.id, peer,
                          target.id if target else "-", data.hex(" "),
-                         " ".join(player.inspector.feed(data)))
+                         " ".join(events))
             if target is None:
                 continue  # no ring peer yet (lone node)
             try:
@@ -686,6 +704,27 @@ async def handle_ws(
 # race-free (single-threaded) — no http.server thread, no locks. Read-only.
 
 
+# Phase ordering for "most advanced wins" when a room is aggregated (STORY-07).
+_PHASE_ORDER = {"idle": 0, "electing": 1, "counting": 2, "in-game": 3}
+
+
+def _room_observe(reg: "Registry") -> "tuple[str, int | None]":
+    """The room's coarse phase and master id from the always-on per-player
+    inspectors (read-only, off the relay path). Phase = the most advanced among
+    the players; master = the player that emitted COUNT-PLAYERS-start."""
+    phase = "idle"
+    master = None
+    for player in reg.players():
+        insp = player.inspector
+        if insp is None:
+            continue
+        if _PHASE_ORDER.get(insp.phase, 0) > _PHASE_ORDER.get(phase, 0):
+            phase = insp.phase
+        if insp.elected_master and master is None:
+            master = player.id
+    return phase, master
+
+
 def _status_snapshot(room: str = DEFAULT_ROOM) -> dict:
     """Race-free snapshot of one room, read from the asyncio loop. Schema (status.json):
 
@@ -702,12 +741,15 @@ def _status_snapshot(room: str = DEFAULT_ROOM) -> dict:
     now = asyncio.get_event_loop().time()
     reg = rooms.registry(room)
     players = reg.players() if reg is not None else []
+    phase, master = _room_observe(reg) if reg is not None else ("idle", None)
     return {
         "uptime_s": int(now - _started_at),
         "listen": _listen_addr,
         "room": room,
         "players_online": len(players),
         "cap": MAX_PLAYERS_PER_ROOM,
+        "phase": phase,
+        "master": master,
         "ring": [p.id for p in players],  # ring order = insertion order, wraps
         "players": [
             {
@@ -760,6 +802,7 @@ _STATUS_PAGE = (
     "svg{display:block;width:100%;height:82vh}"
     ".node circle{fill:#161b22;stroke:#4f9cff;stroke-width:2}"
     ".node.stalled circle{stroke:#5a6068}"
+    ".node.master circle{stroke:#f0a500;stroke-width:3}"
     ".node text{fill:#d8dee9;font-size:13px;text-anchor:middle}"
     ".node .sub{fill:#8b949e;font-size:11px}"
     ".node.stalled text{fill:#6b7280}"
@@ -768,7 +811,8 @@ _STATUS_PAGE = (
     "</style></head><body>"
     "<header><h1>MIDI-to-IP orchestrator</h1>"
     "<div id='meta'>connecting...</div>"
-    "<div id='roombar'>room: <select id='room'></select></div></header>"
+    "<div id='roombar'>room: <select id='room'></select> "
+    "<a href='/lobby' style='color:#4f9cff'>all rooms</a></div></header>"
     "<svg viewBox='0 0 800 600' preserveAspectRatio='xMidYMid meet'>"
     "<defs><marker id='a' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' "
     "markerHeight='7' orient='auto-start-reverse'>"
@@ -777,6 +821,7 @@ _STATUS_PAGE = (
     "<script>"
     "const NS='http://www.w3.org/2000/svg',STALE=10,CX=400,CY=300,R=205;"
     "const sel=document.getElementById('room');let roomSig=null;"
+    "const URLROOM=new URLSearchParams(location.search).get('room')||'';let preset=false;"
     "function el(t,a,p){const e=document.createElementNS(NS,t);"
     "for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e}"
     "function pos(i,n){if(n===1)return[CX,CY];"
@@ -789,14 +834,16 @@ _STATUS_PAGE = (
     "roomSig=sig;const cur=sel.value;sel.textContent='';for(const r of rs){"
     "const o=el('option',{value:r.room},sel);"
     "o.textContent=(r.room||'(default)')+' ('+r.players+'/'+r.cap+')';}"
-    "if(rs.some(r=>r.room===cur))sel.value=cur;}catch(e){}}"
+    "if(rs.some(r=>r.room===cur))sel.value=cur;"
+    "if(!preset&&URLROOM&&rs.some(r=>r.room===URLROOM)){sel.value=URLROOM;preset=true;}"
+    "}catch(e){}}"
     "async function tick(){await loadRooms();const rk=sel.value;let s;"
     "try{s=await(await fetch('status.json'+(rk?('?room='+encodeURIComponent(rk)):''),"
     "{cache:'no-store'})).json()}"
     "catch(e){document.getElementById('meta').textContent="
     "'orchestrator unreachable (retrying)';return}"
-    "document.getElementById('meta').textContent='room '+(s.room||'(default)')+' | uptime '"
-    "+s.uptime_s+'s | '+s.players_online+'/'+s.cap+' online';"
+    "document.getElementById('meta').textContent='room '+(s.room||'(default)')+' | '"
+    "+(s.phase||'idle')+' | uptime '+s.uptime_s+'s | '+s.players_online+'/'+s.cap+' online';"
     "const E=document.getElementById('edges'),N=document.getElementById('nodes');"
     "E.textContent='';N.textContent='';"
     "const ps=s.players||[],n=ps.length;"
@@ -813,7 +860,8 @@ _STATUS_PAGE = (
     "x2=CX+R*Math.cos(a2),y2=CY+R*Math.sin(a2);"
     "el('path',{class:'edge',d:'M '+x1+' '+y1+' A '+R+' '+R+' 0 0 1 '+x2+' '+y2},E)}}"
     "ps.forEach((p,i)=>{const X=P[i][0],Y=P[i][1];"
-    "const gg=el('g',{class:'node'+(p.idle_s>STALE?' stalled':'')},N);"
+    "const gg=el('g',{class:'node'+(p.idle_s>STALE?' stalled':'')"
+    "+(p.id===s.master?' master':'')},N);"
     "el('circle',{cx:X,cy:Y,r:36},gg);"
     "el('text',{x:X,y:Y-6},gg).textContent='#'+p.id;"
     "el('text',{x:X,y:Y+11,class:'sub'},gg).textContent="
@@ -827,6 +875,44 @@ _STATUS_PAGE = (
 
 def _status_html() -> bytes:
     return _STATUS_PAGE
+
+
+# Lobby page (STORY-07): lists every room with its player count and phase, each a
+# link into that room's ring view (/?room=KEY). Polls /rooms every 2 s.
+_LOBBY_PAGE = (
+    "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>MIDI-to-IP rooms</title><style>"
+    "body{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
+    "background:#0e1116;color:#d8dee9}"
+    "header{padding:.7em 1.1em;border-bottom:1px solid #21262d}"
+    "h1{font-size:1.05em;margin:0}"
+    "table{border-collapse:collapse;width:100%;font-size:.95em}"
+    "th,td{text-align:left;padding:.5em 1.1em;border-bottom:1px solid #21262d}"
+    "a{color:#4f9cff;text-decoration:none}"
+    ".ph{color:#8b949e}"
+    "</style></head><body>"
+    "<header><h1>MIDI-to-IP rooms</h1></header>"
+    "<table><thead><tr><th>room</th><th>players</th><th>phase</th></tr></thead>"
+    "<tbody id='b'></tbody></table>"
+    "<script>"
+    "async function tick(){let d;"
+    "try{d=await(await fetch('rooms',{cache:'no-store'})).json()}catch(e){return}"
+    "const b=document.getElementById('b');b.textContent='';"
+    "for(const r of (d.rooms||[])){const tr=document.createElement('tr');"
+    "const td1=document.createElement('td');const a=document.createElement('a');"
+    "a.href='/?room='+encodeURIComponent(r.room);a.textContent=r.room||'(default)';"
+    "td1.appendChild(a);"
+    "const td2=document.createElement('td');td2.textContent=r.players+'/'+r.cap;"
+    "const td3=document.createElement('td');td3.className='ph';td3.textContent=r.phase||'idle';"
+    "tr.appendChild(td1);tr.appendChild(td2);tr.appendChild(td3);b.appendChild(tr);}}"
+    "tick();setInterval(tick,2000);"
+    "</script></body></html>"
+).encode("utf-8")
+
+
+def _lobby_html() -> bytes:
+    return _LOBBY_PAGE
 
 
 def _rooms_json() -> bytes:
@@ -921,6 +1007,9 @@ async def _route_http(writer: asyncio.StreamWriter, method: str, path: str,
                 pass
         await _http_send(writer, "200 OK",
                          json.dumps({"room": key, "deleted": True}).encode("utf-8"))
+        return
+    if method == "GET" and path_only == "/lobby":
+        await _http_send(writer, "200 OK", _lobby_html(), "text/html; charset=utf-8")
         return
     if method == "GET" and path_only == "/":
         await _http_send(writer, "200 OK", _status_html(), "text/html; charset=utf-8")

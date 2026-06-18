@@ -478,6 +478,32 @@ def main() -> int:
               code == 200 and all(r["room"] != "SAVED"
                                   for r in json.loads(body)["rooms"]))
 
+    # Phase K — per-room observability (EPIC-14 STORY-07): phase + master from the
+    # read-only inspector, /rooms phase, and the lobby page.
+    with server(5073, 8073, "--ws", "--ws-port", "5072", "--admin-key", "K"):
+        print("per-room observability (phase / master / lobby):")
+        http_req(8073, "POST", "/rooms", b'{"key":"PLAY"}', {"X-Admin-Key": "K"})
+        a, oka = ws_connect(5072, room="PLAY")
+        time.sleep(0.3)
+        ws_send(a, b"\x80\x02")  # COUNT-PLAYERS-start + count -> master + counting
+        time.sleep(0.3)
+        sj = json.loads(http_req(8073, "GET", "/status.json?room=PLAY")[1])
+        pid = sj["players"][0]["id"] if sj["players"] else None
+        check("room phase reflects COUNT-PLAYERS", sj["phase"] == "counting")
+        check("room reports the master node", pid is not None and sj["master"] == pid)
+        _, rb = http_req(8073, "GET", "/rooms")
+        check("/rooms carries the per-room phase",
+              any(r["room"] == "PLAY" and r["phase"] == "counting"
+                  for r in json.loads(rb)["rooms"]))
+        ws_send(a, b"\x84")  # START-GAME -> in-game
+        time.sleep(0.3)
+        sj2 = json.loads(http_req(8073, "GET", "/status.json?room=PLAY")[1])
+        check("room phase reaches in-game", sj2["phase"] == "in-game")
+        page = http_req(8073, "GET", "/lobby")[1].decode("utf-8")
+        check("lobby page lists rooms",
+              "MIDI-to-IP rooms" in page and "fetch('rooms'" in page)
+        a.close()
+
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")
