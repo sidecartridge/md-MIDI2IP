@@ -2,7 +2,7 @@
 id: EPIC-15
 iteration: 6
 title: Robustness pass (buffer cleanup on disconnect)
-status: todo
+status: in-progress
 ---
 
 ## Goal
