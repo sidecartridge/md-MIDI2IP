@@ -2,7 +2,7 @@
 id: STORY-04
 epic: EPIC-12
 title: Multi-node scaling and recovery paths
-status: todo
+status: done
 ---
 
 ## Goal
@@ -12,12 +12,12 @@ a real session hits.
 
 ## Tasks
 
-- [ ] Add a third node (any mix of ST + SidecarTridge and Hatari + gateway); all three appear on the ring and a 3-player match plays
-- [ ] Reconnection node recycling: drop a node's link and reconnect from the same IP; the stalled prior entry is superseded and the reconnection takes a fresh node id
-- [ ] Restart the orchestrator while nodes are up; nodes reconnect and re-form the ring without a manual reset
-- [ ] Drop Wi-Fi on the ST node and restore it; the node reconnects to the orchestrator and rejoins the ring
-- [ ] Stall one node (pause its Hatari); the slow-player drop plus the stale-queue flush keep the other nodes from freezing
-- [ ] Record the largest player count actually exercised (target up to 16) and note any node that misbehaves
+- [x] Add a third node (any mix of ST + SidecarTridge and Hatari + gateway); all three appear on the ring and a 3-player match plays
+- [x] Reconnection node recycling: drop a node's link and reconnect from the same IP; the stalled prior entry is superseded and the reconnection takes a fresh node id
+- [x] Restart the orchestrator while nodes are up; nodes reconnect and re-form the ring without a manual reset
+- [x] Drop Wi-Fi on the ST node and restore it; the node reconnects to the orchestrator and rejoins the ring
+- [x] Stall one node (pause its Hatari); the slow-player drop plus the stale-queue flush keep the other nodes from freezing
+- [x] Record the largest player count actually exercised (target up to 16) and note any node that misbehaves
 
 ## Acceptance
 

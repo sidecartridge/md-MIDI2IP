@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-12
 title: Boot, config and node bring-up (ST via Booster + Hatari via gateway)
-status: todo
+status: done
 ---
 
 ## Goal
@@ -13,13 +13,13 @@ by the gateway.
 
 ## Tasks
 
-- [ ] Install MIDI-to-IP from the Booster (Apps tab, Download, Launch) onto the SidecarTridge Multi-device; the app launches without dropping back to the Booster
-- [ ] On boot the MIDI-to-IP menu shows the countdown plus Wi-Fi state, local IP, and orchestrator connection status
-- [ ] Set the endpoint with `[H]ost` and `[P]ort`; power-cycle the ST and confirm the values persist with no re-entry
-- [ ] `[E]xit to GEM` launches the firmware and reaches the GEM desktop; `[X]` returns to the Booster
-- [ ] Start the orchestrator (`python3 orchestrator/orchestrator.py`); it binds the game port (5005) and the HTTP status port (8080)
-- [ ] Start the Hatari gateway (`python3 hatari-gateway/gateway.py --host <orchestrator-ip>`); it creates `midi_out.fifo` + `midi_in.fifo` and prints the exact Hatari command
-- [ ] Launch Hatari with `--midi-out` / `--midi-in` pointed at those FIFOs; the gateway reports the bridge is connected both ways
+- [x] Install MIDI-to-IP from the Booster (Apps tab, Download, Launch) onto the SidecarTridge Multi-device; the app launches without dropping back to the Booster
+- [x] On boot the MIDI-to-IP menu shows the countdown plus Wi-Fi state, local IP, and orchestrator connection status
+- [x] Set the endpoint with `[H]ost` and `[P]ort`; power-cycle the ST and confirm the values persist with no re-entry
+- [x] `[E]xit to GEM` launches the firmware and reaches the GEM desktop; `[X]` returns to the Booster
+- [x] Start the orchestrator (`python3 orchestrator/orchestrator.py`); it binds the game port (5005) and the HTTP status port (8080)
+- [x] Start the Hatari gateway (`python3 hatari-gateway/gateway.py --host <orchestrator-ip>`); it creates `midi_out.fifo` + `midi_in.fifo` and prints the exact Hatari command
+- [x] Launch Hatari with `--midi-out` / `--midi-in` pointed at those FIFOs; the gateway reports the bridge is connected both ways
 
 ## Acceptance
 

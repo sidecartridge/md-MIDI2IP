@@ -2,7 +2,7 @@
 id: EPIC-12
 iteration: 3
 title: Hardware test pass (Atari ST + Hatari)
-status: todo
+status: done
 ---
 
 ## Goal

@@ -2,7 +2,7 @@
 id: STORY-02
 epic: EPIC-12
 title: Ring join and orchestrator observability
-status: todo
+status: done
 ---
 
 ## Goal
@@ -12,11 +12,11 @@ correct per-node telemetry.
 
 ## Tasks
 
-- [ ] The ST node connects and appears on the ring view at `http://<orchestrator-ip>:8080/`, which refreshes every 2 s
-- [ ] The Hatari node connects and appears as a second node on the same ring
-- [ ] Each node shows its IP and reverse-DNS host (or the IP when no PTR record resolves)
-- [ ] `status.json` reports per node in ring order: `id`, `ip`, `host`, `peer`, `connected_s`, `idle_s`, `bytes_out`, `bytes_in`; the byte counters climb as MIDI flows
-- [ ] Running the orchestrator with `--inspect` logs decoded MIDI Maze events off the relay path; `--no-http` disables the status page
+- [x] The ST node connects and appears on the ring view at `http://<orchestrator-ip>:8080/`, which refreshes every 2 s
+- [x] The Hatari node connects and appears as a second node on the same ring
+- [x] Each node shows its IP and reverse-DNS host (or the IP when no PTR record resolves)
+- [x] `status.json` reports per node in ring order: `id`, `ip`, `host`, `peer`, `connected_s`, `idle_s`, `bytes_out`, `bytes_in`; the byte counters climb as MIDI flows
+- [x] Running the orchestrator with `--inspect` logs decoded MIDI Maze events off the relay path; `--no-http` disables the status page
 
 ## Acceptance
 

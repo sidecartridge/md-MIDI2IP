@@ -1,140 +1,69 @@
 # Changelog
 
-## v1.2.1 (2026-05-20) - release
+## v1.0.0beta (2026-06-18)
 
-### Sync ack: no false positives on missing hardware
+MIDI-to-IP turns a real Atari ST (through the SidecarTridge Multi-device) or the Hatari
+emulator into a network player for MIDI Maze, so people on different machines or networks
+can play the classic ring deathmatch over IP. This beta is the first build where the whole
+experience works end to end on real hardware.
 
-The m68k `send_sync` / `send_sync_write` waiters previously ack'd a
-command as soon as `RANDOM_TOKEN == d2` (the token the m68k sent).
-That condition also holds when the cartridge is unplugged or the
-microfirmware is not running, because the bus returns the same
-open-bus / uninitialised value at both `RANDOM_TOKEN_ADDR` and
-`RANDOM_TOKEN_SEED_ADDR` — apps would proceed as if the device had
-replied.
+### Play MIDI Maze over the network
 
-The waiter now additionally requires `RANDOM_TOKEN_SEED_ADDR` to have
-moved away from the value the m68k loaded at request time. The RP
-side already writes a strictly-incrementing `incrementalCmdCount` to
-the seed slot on every response, so a real reply always advances the
-seed; absent hardware leaves it equal to `d2` and the loop runs to
-timeout instead.
+- Bring up a real Atari ST with a SidecarTridge, or the Hatari emulator through the gateway,
+  and play MIDI Maze with up to 16 players in one ring. Real and emulated machines mix
+  freely.
+- A small orchestrator wires everyone into the ring and relays the game between players. It
+  is a single Python script with no dependencies to install.
+- A live web view (the orchestrator's status page) draws the ring as players join and shows
+  the bytes flowing to and from each node.
 
-RP-side `chandler.c` gains a comment documenting the
-SEED-must-advance invariant that the m68k waiter depends on.
+### Set it up from the Atari ST boot menu
 
-Thanks to @neilrackett (PR #5) for the fix.
+- The MIDI-to-IP boot menu lets you point the ST at the orchestrator: press `[H]ost` for its
+  address and `[P]ort` for its port. Your Wi-Fi state, local IP, and connection status are
+  shown on screen, and the settings persist across reboots.
+- Launch the firmware with `[E]xit to GEM`, or step back to the Booster with `[X]`. From GEM
+  you just run MIDI Maze as usual.
 
----
+### Connect over TCP or WebSocket (new)
 
-## v1.2.0 (2026-04-28) - release
+- A node can reach the orchestrator over a plain socket or over **WebSocket**. WebSocket
+  rides a standard web port and an HTTP upgrade, so you can reach an orchestrator that sits
+  behind a reverse proxy, or a firewall that only allows web traffic. The game bytes are the
+  same either way.
+- Choose it per node: press `[T]ransport` on the ST to switch between `tcp` and `ws` (each
+  carrier keeps its own port), or pass `--transport ws` to the Hatari gateway.
 
-### Shared 64 KB region rearranged
+### Private play rooms (new)
 
-Single source-of-truth layout for the region mirrored at m68k
-`$FA0000` / RP `0x20030000`. Cartridge code lives in the first 8 KB,
-metadata block sits just above it, and the framebuffer moves to the
-top so app data fills one contiguous 48 KB arena.
+- One orchestrator can host many separate games at once. A **room key** picks a private
+  ring: everyone who enters the same key (for example `DIEGOROOM`) plays together, isolated
+  from the other rooms. A node with no key joins a shared default ring.
+- Enter the key with `[R]oom` on the Atari ST, or `--room` on the Hatari gateway.
+- An operator creates rooms over a small REST API, so only the rooms you set up can be
+  joined. A **lobby page** lists every room with its player count and current game phase,
+  each one a link into its ring view, where the master node is highlighted.
 
-| m68k addr | Region                                       |
-| --------- | -------------------------------------------- |
-| `$FA0000` | CARTRIDGE (max 8 KB, build.sh-enforced)      |
-| `$FA2000` | sentinel + random token + 60 shared vars     |
-| `$FA2100` | TRANSTABLE (512 B high-res mask table)       |
-| `$FA2300` | APP_FREE (~48 KB)                            |
-| `$FAE0C0` | FRAMEBUFFER (8000 B)                         |
+### More reliable
 
-Reference offsets via the constants in `rp/src/include/chandler.h`
-and `target/atarist/src/main.s`. Apps that hard-coded the old
-addresses (`$FA8000` framebuffer, `$FAF000` random token) must
-migrate.
+- A node that disconnects leaves the ring promptly instead of lingering on screen.
+- A reconnect no longer replays stale bytes left over from before the drop, so a player who
+  drops and rejoins does not corrupt the match.
 
-### User firmware module
+### Install
 
-New per-module split via `target/atarist/src/userfw.ld`:
-2 KB for `main.s` + 6 KB for the new `userfw.s` (entry at
-`USERFW = $FA0800`). Pattern mirrors md-drives-emulator's
-`gemdrive.ld`.
+- Install MIDI-to-IP from the **Booster** app like any SidecarTridge microfirmware: open the
+  Apps tab, download it, then launch. No manual flashing needed.
+- The orchestrator and the Hatari gateway are Python 3 standard-library scripts, so they run
+  anywhere Python does with nothing to install.
 
-Launch path: RP terminal menu `[F]irmware` → `CMD_START = 4` on the
-cartridge sentinel → `rom_function: jmp USERFW`. Default `userfw.s`
-is a Cconws demo that clears the screen and prints
-`Example firmware load...`.
-
----
-
-## v1.1.0 (2026-04-27) - release
-
-Architectural port of the framework improvements introduced in
-md-drives-emulator. Apps derived from previous versions of this template
-will need to migrate (see "Breaking changes" below).
-
-### Memory layout
-- RAM grown from 128 KB to 192 KB.
-- ROM_IN_RAM reduced from 128 KB @ `0x20020000` to 64 KB @ `0x20030000`.
-- Result: 64 KB of additional general-purpose RAM available to apps.
-
-### ROM4 read engine (cartridge data path)
-- Single-bank 64 KB ROM (ROM_BANKS 2 → 1). ROM3 is no longer a data
-  bank; it is now used exclusively as the command channel.
-- PIO program rewritten: waits directly on `ROM4_GPIO`, captures 16
-  bits of address, two-channel chained DMA serves reads with no CPU
-  or IRQ involvement.
-- `ROMEMUL_BUS_BITS` 17 → 16; `FLASH_ROM3_LOAD_OFFSET` removed.
-
-### ROM3 command channel — new (`commemul`)
-- Dedicated PIO state machine on `ROM3_GPIO` captures every ROM3
-  access into a 32 KB ring buffer via DMA in ring mode (no IRQ).
-- `commemul_poll(callback)` drains the ring lock-free using
-  `dma_hw->ch[ch].transfer_count` to derive the producer index.
-
-### Command dispatcher — new (`chandler`)
-- Polled command parser/dispatcher. `chandler_loop()` calls
-  `commemul_poll`, parses via `tprotocol_parse`, and dispatches each
-  command to a registered callback list.
-- Apps register handlers with `chandler_addCB(callback)`.
-- Replaces the previous `DMA_IRQ_1`-driven snoop in `term.c`.
-
-### Terminal
-- Removed `term_dma_irq_handler_lookup`. Terminal commands are now
-  delivered through `term_command_cb`, which is registered with
-  `chandler_addCB` during emulation startup.
-
-### Orchestration (emul.c)
-- Boot now calls
-  `init_romemul(false); commemul_init(); chandler_init();
-  chandler_addCB(term_command_cb);`.
-- Main loop drains commands via `chandler_loop()` before `term_loop()`.
-- WiFi polling callback drains both, so commands sent during the
-  multi-second WiFi connect window are not dropped.
-
-### m68k framework fixes
-- `inc/tos.s`: fix `endmv` → `endm` typo in the `pchar2` macro.
-- `inc/sidecart_functions.s`: rename transient `d0` → `d4` in the
-  `_write_to_sidecart_*` loops. `d0` is the sync command reply
-  register; reusing it mid-write clobbered the reply slot for any
-  app that issued payload writes.
-- New `COMMAND_WRITE_TIMEOUT` (defaults to `COMMAND_TIMEOUT`) used by
-  `_start_sync_write_code_in_stack`, so apps can extend the write
-  timeout for large payloads without affecting read-command timing.
-
-### Breaking changes for downstream apps
-- `init_romemul(IRQInterceptionCallback, IRQInterceptionCallback,
-  bool)` → `init_romemul(bool)`.
-- Removed: `dma_setResponseCB`, `romemul_getLookupDataRomDmaChannel`,
-  `dma_irqHandlerLookup`, `dma_irqHandlerAddress`, the
-  `IRQInterceptionCallback` typedef.
-- `tprotocol`: `TransmissionProtocol.payload` is now `uint16_t[/2]`
-  (was `unsigned char[]`). Static parser state is now extern; the
-  template provides `tprotocol.c` defining the externs.
-- `term.h`: `ADDRESS_HIGH_BIT` and the `ROM3_GPIO` define removed.
-
-### Build
-- Added `chandler.c`, `commemul.c` to `rp/src/CMakeLists.txt` sources.
-- Added `pico_generate_pio_header` for `commemul.pio`.
+See the [README](README.md) for full setup, including the WebSocket and private-room
+details.
 
 ---
 
-## v0.0.3 (2025-07-01) - release
-- First version
+## v1.0.0alpha
 
----
+First playable cut: MIDI Maze running over IP between two nodes, with the Atari ST's MIDI
+captured at the BIOS layer and carried to the orchestrator. The groundwork that v1.0.0beta
+turns into a full, room-aware, multi-transport experience.

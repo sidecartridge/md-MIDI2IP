@@ -9,7 +9,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | --- | --- | --- |
 | 1 | Architecture spike: build the full stack end to end | done |
 | 2 | Transport redesign, HW re-validation + orchestrator revamp | done |
-| 3 | Hardware test pass: ST + Hatari verification checklist | in progress |
+| 3 | Hardware test pass: ST + Hatari verification checklist | done |
 | 4 | Optional WebSocket transport (TCP or WebSocket) | done |
 | 5 | Private rooms (room-key MIDI rings) | done |
 | 6 | Robustness pass: buffer cleanup on disconnect | done |
@@ -92,9 +92,12 @@ recovery cases.
 
 | Epic | Status | Note |
 | --- | --- | --- |
-| EPIC-12 · Hardware test pass (ST + Hatari) | todo | manual checklist: boot/config, ring join, full match, multi-node + recovery |
+| EPIC-12 · Hardware test pass (ST + Hatari) | done | manual checklist: boot/config, ring join, full match, multi-node + recovery |
 
-**Outcome:** pending.
+**Outcome:** the standing test checklist was run on real hardware and passed: boot and
+config bring-up, ring join and observability, a full mixed ST + Hatari match, and the
+multi-node and reconnect recovery paths. This is the per-release validation that backs the
+v1.0.0beta cut. **Iteration complete.**
 
 ---
 
