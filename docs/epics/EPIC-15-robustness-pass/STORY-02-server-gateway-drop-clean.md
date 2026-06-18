@@ -2,7 +2,7 @@
 id: STORY-02
 epic: EPIC-15
 title: Confirm the orchestrator and gateway drop everything on disconnect
-status: todo
+status: done
 ---
 
 ## Goal
@@ -12,10 +12,10 @@ or partial-frame bytes that could leak into another node or a later session.
 
 ## Tasks
 
-- [ ] Orchestrator: confirm dropping a player removes it from its room, closes the writer (discarding its transport write buffer), and drops its WS decoder state; verify no bytes destined for the dropped player linger in another player's buffer beyond what was already delivered
-- [ ] Gateway: confirm a disconnect ends the bridge with no partial WS frame or buffered bytes carried over; the `_WsSocket` decoder and its initial buffer do not survive into a new socket
-- [ ] Add selftest coverage: after a player drops and a new player joins the same room, the new player receives only post-join bytes, with no replay of the dropped player's queued traffic
-- [ ] Document the buffering model (where bytes can sit, and that a close discards them) in the orchestrator README or the contract
+- [x] Orchestrator: confirm dropping a player removes it from its room, closes the writer (discarding its transport write buffer), and drops its WS decoder state; verify no bytes destined for the dropped player linger in another player's buffer beyond what was already delivered
+- [x] Gateway: confirm a disconnect ends the bridge with no partial WS frame or buffered bytes carried over; the `_WsSocket` decoder and its initial buffer do not survive into a new socket
+- [x] Add selftest coverage: after a player drops and a new player joins the same room, the new player receives only post-join bytes, with no replay of the dropped player's queued traffic
+- [x] Document the buffering model (where bytes can sit, and that a close discards them) in the orchestrator README or the contract
 
 ## Acceptance
 
