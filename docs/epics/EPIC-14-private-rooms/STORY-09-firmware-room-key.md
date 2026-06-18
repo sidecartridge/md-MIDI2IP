@@ -2,7 +2,7 @@
 id: STORY-09
 epic: EPIC-14
 title: Firmware room key (config + boot menu + Bearer handshake header)
-status: todo
+status: done
 ---
 
 ## Goal
@@ -12,12 +12,12 @@ handshake as `Authorization: Bearer`.
 
 ## Tasks
 
-- [ ] Add the aconfig key `MIDI_ROOM` (string, default empty = default room) in `rp/src/include/midi.h` and the `aconfig.c` defaults
-- [ ] Read it in `midi_load_config` into a room variable, normalized to uppercase
-- [ ] Add a `[R]oom` boot-menu entry (DATA_INPUT, like `[H]ost`) to type and persist the key; apply via `midi_net_reload`; show the room in the menu and the status line
-- [ ] Include `Authorization: Bearer <room>` in the WS client handshake (`midi_ws_start_handshake`) when a room is set; omit it for the default room
-- [ ] Note in the menu that the room applies on the `ws` transport; a `tcp` node uses the default room
-- [ ] Build clean (`pico_w`) and confirm the key persists across a power cycle
+- [x] Add the aconfig key `MIDI_ROOM` (string, default empty = default room) in `rp/src/include/midi.h` and the `aconfig.c` defaults
+- [x] Read it in `midi_load_config` into a room variable, normalized to uppercase
+- [x] Add a `[R]oom` boot-menu entry (DATA_INPUT, like `[H]ost`) to type and persist the key; apply via `midi_net_reload`; show the room in the menu and the status line
+- [x] Include `Authorization: Bearer <room>` in the WS client handshake (`midi_ws_start_handshake`) when a room is set; omit it for the default room
+- [x] Note in the menu that the room applies on the `ws` transport; a `tcp` node uses the default room
+- [x] Build clean (`pico_w`) and confirm the key persists across a power cycle
 
 ## Acceptance
 

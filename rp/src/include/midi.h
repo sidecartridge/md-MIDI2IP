@@ -52,6 +52,7 @@
 #define MIDI_CFG_TRANSPORT "MIDI_TRANSPORT"  // string: "tcp" | "ws" (EPIC-13 D-13)
 #define MIDI_CFG_WS_PORT "MIDI_WS_PORT"      // int: orchestrator WebSocket port
 #define MIDI_CFG_WS_PATH "MIDI_WS_PATH"      // string: WebSocket request path
+#define MIDI_CFG_ROOM "MIDI_ROOM"            // string: play-room key (EPIC-14 D-14); empty = default ring
 #define MIDI_DEFAULT_HOST "0.0.0.0"      // placeholder until set (STORY-04)
 #define MIDI_DEFAULT_PORT 5005           // TCP carrier (orchestrator --port)
 #define MIDI_DEFAULT_TRANSPORT "tcp"     // EPIC-13: default carrier (D-13)
@@ -80,6 +81,9 @@ const char *midi_net_status_str(void);
 
 // EPIC-13 STORY-06: the active transport for display ("tcp"/"ws").
 const char *midi_net_transport_str(void);
+
+// EPIC-14 STORY-09: the configured room key for display ("" = default ring).
+const char *midi_net_room_str(void);
 
 // EPIC-13: the aconfig port key for the active transport (MIDI_PORT for tcp,
 // MIDI_WS_PORT for ws), so the menu shows/edits the right one.

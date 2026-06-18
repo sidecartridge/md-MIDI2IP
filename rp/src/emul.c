@@ -54,6 +54,7 @@ static void cmdPing(const char *arg);
 static void cmdHost(const char *arg);
 static void cmdPort(const char *arg);
 static void cmdTransport(const char *arg);
+static void cmdRoom(const char *arg);
 
 // Command table
 static const Command commands[] = {
@@ -61,6 +62,7 @@ static const Command commands[] = {
     {"h", cmdHost},
     {"p", cmdPort},
     {"t", cmdTransport},
+    {"r", cmdRoom},
     {"e", cmdFirmware},
     {"f", cmdFirmware},
     {"x", cmdBooster},
@@ -180,6 +182,11 @@ static void menu(void) {
   term_printString((cfgPort != NULL) ? cfgPort->value : "-");
   term_printString("\n  [T]ransport : ");
   term_printString(midi_net_transport_str());
+  term_printString("\n  [R]oom : ");
+  {
+    const char *room = midi_net_room_str();
+    term_printString((room[0] != '\0') ? room : "(default)");
+  }
   term_printString("\n\n");
 
   // Status: Wi-Fi, local IP, orchestrator (EPIC-06 STORY-05)
@@ -278,6 +285,31 @@ void cmdTransport(const char *arg) {
   settings_put_string(aconfig_getContext(), MIDI_CFG_TRANSPORT, next);
   settings_save(aconfig_getContext(), true);
   midi_net_reload();  // apply live: drop + reconnect over the new transport
+  menu();
+}
+
+// EPIC-14 STORY-09: edit the play-room key (joins a private ring over ws). First
+// press prompts and switches to DATA_INPUT; the typed value re-invokes this on
+// Enter, normalized to uppercase and persisted. Empty clears it (default ring).
+void cmdRoom(const char *arg) {
+  (void)arg;
+  if (term_getCommandLevel() == TERM_COMMAND_LEVEL_SINGLE_KEY) {
+    menuScreenActive = false;
+    showTitle();
+    term_printString("\n\nPlay-room key (empty = default ring): ");
+    term_setCommandLevel(TERM_COMMAND_LEVEL_DATA_INPUT);
+    return;
+  }
+  term_setCommandLevel(TERM_COMMAND_LEVEL_SINGLE_KEY);
+  char room[SETTINGS_MAX_VALUE_LENGTH];
+  snprintf(room, sizeof(room), "%s", term_getInputBuffer());
+  for (char *p = room; *p != '\0'; p++) {  // normalize to uppercase (D-14)
+    if (*p >= 'a' && *p <= 'z') *p = (char)(*p - 32);
+  }
+  settings_put_string(aconfig_getContext(), MIDI_CFG_ROOM, room);
+  settings_save(aconfig_getContext(), true);
+  midi_net_reload();  // apply live: drop + reconnect into the new room
+  term_clearInputBuffer();
   menu();
 }
 

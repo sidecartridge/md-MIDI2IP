@@ -93,6 +93,9 @@ static bool midiEnabled = true;
 typedef enum { MIDI_TX_TCP = 0, MIDI_TX_WS } midi_transport_t;
 static midi_transport_t midiTransport = MIDI_TX_TCP;
 static char midiWsPath[SETTINGS_MAX_VALUE_LENGTH] = MIDI_DEFAULT_WS_PATH;
+// EPIC-14 STORY-09: play-room key, sent as Authorization: Bearer on the WS
+// handshake (D-14). Empty = the default ring. Normalized to uppercase.
+static char midiRoom[SETTINGS_MAX_VALUE_LENGTH] = "";
 
 // WebSocket OUT framing scratch (poll context): one frame at a time, so a single
 // static buffer is reused by the OUT drain and the pong responder.
@@ -266,15 +269,23 @@ static void midi_ws_start_handshake(void) {
   midi_ws_base64(nonce, sizeof(nonce), midiWsKey);
   midi_ws_decoder_init(&midiWsDec);
   midiWsHsLen = 0;
-  char req[320];
+  // Room key -> Authorization: Bearer (EPIC-14 STORY-09); empty = the default ring.
+  char auth[SETTINGS_MAX_VALUE_LENGTH + 32];
+  if (midiRoom[0] != '\0') {
+    snprintf(auth, sizeof(auth), "Authorization: Bearer %s\r\n", midiRoom);
+  } else {
+    auth[0] = '\0';
+  }
+  char req[512];
   int n = snprintf(req, sizeof(req),
                    "GET %s HTTP/1.1\r\n"
                    "Host: %s:%u\r\n"
                    "Upgrade: websocket\r\n"
                    "Connection: Upgrade\r\n"
                    "Sec-WebSocket-Key: %s\r\n"
+                   "%s"
                    "Sec-WebSocket-Version: 13\r\n\r\n",
-                   midiWsPath, midiNetHost, (unsigned)midiNetPort, midiWsKey);
+                   midiWsPath, midiNetHost, (unsigned)midiNetPort, midiWsKey, auth);
   midiNetState = MIDI_NET_WS_HANDSHAKE;
   if (n <= 0 || (size_t)n >= sizeof(req) ||
       tcp_write(midiNetPcb, req, (u16_t)n, TCP_WRITE_FLAG_COPY) != ERR_OK) {
@@ -615,6 +626,9 @@ const char *midi_net_port_key(void) {
   return (midiTransport == MIDI_TX_WS) ? MIDI_CFG_WS_PORT : MIDI_CFG_PORT;
 }
 
+// EPIC-14 STORY-09: the configured room key for the menu/status ("" = default ring).
+const char *midi_net_room_str(void) { return midiRoom; }
+
 // STORY-06: format a one-line orchestrator liveness report — endpoint, link
 // state, and (when up) how long the session has been connected. Reuses the
 // persistent connection; no extra probe traffic.
@@ -736,6 +750,14 @@ static void midi_load_config(void) {
     e = settings_find_entry(cfg, MIDI_CFG_WS_PATH);
     if (e != NULL && e->value[0] != '\0') {
       snprintf(midiWsPath, sizeof(midiWsPath), "%s", e->value);
+    }
+    e = settings_find_entry(cfg, MIDI_CFG_ROOM);
+    midiRoom[0] = '\0';
+    if (e != NULL && e->value[0] != '\0') {
+      snprintf(midiRoom, sizeof(midiRoom), "%s", e->value);
+      for (char *q = midiRoom; *q != '\0'; q++) {  // normalize to uppercase (D-14)
+        if (*q >= 'a' && *q <= 'z') *q = (char)(*q - 32);
+      }
     }
   }
   // The active carrier's port follows the transport selection (EPIC-13 STORY-06).
