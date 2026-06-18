@@ -392,6 +392,48 @@ def main() -> int:
         check("deleted room no longer listed",
               all(r["room"] != "ALPHA" for r in json.loads(body)["rooms"]))
 
+    # Phase H — room lifecycle (EPIC-14 STORY-04): 16-player cap, auto codes,
+    # empty-room TTL reaper. A short --room-ttl keeps the reaper test fast.
+    with server(5083, 8083, "--ws", "--ws-port", "5082", "--admin-key", "K",
+                "--room-ttl", "1"):
+        print("room lifecycle (cap / auto-code / TTL):")
+        http_req(8083, "POST", "/rooms", b'{"key":"FULL"}', {"X-Admin-Key": "K"})
+        socks = []
+        for _ in range(16):
+            s, ok = ws_connect(5082, room="FULL")
+            if ok:
+                socks.append(s)
+        time.sleep(0.5)
+        _, body = http_req(8083, "GET", "/rooms")
+        cnt = next((r["players"] for r in json.loads(body)["rooms"] if r["room"] == "FULL"), 0)
+        check("room fills to the 16-player cap", len(socks) == 16 and cnt == 16)
+        s17, ok17 = ws_connect(5082, room="FULL")
+        check("the 17th join is refused (cap)", not ok17)
+        for s in socks:
+            s.close()
+        try:
+            s17.close()
+        except OSError:
+            pass
+
+        # Auto-generated code: POST with no key returns a usable room code.
+        code, body = http_req(8083, "POST", "/rooms", b"", {"X-Admin-Key": "K"})
+        auto = json.loads(body).get("room", "")
+        check("POST with no key mints a room code", code == 200 and 1 <= len(auto) <= 16)
+        ac, okac = ws_connect(5082, room=auto)
+        check("the auto code is joinable", okac)
+        ac.close()
+
+        # Empty-room TTL: a used room that empties is reaped (ttl=1s).
+        http_req(8083, "POST", "/rooms", b'{"key":"TEMP"}', {"X-Admin-Key": "K"})
+        tmp, oktmp = ws_connect(5082, room="TEMP")
+        check("temp room joinable before reap", oktmp)
+        tmp.close()  # room TEMP is now used and empty
+        time.sleep(3.5)
+        _, body = http_req(8083, "GET", "/rooms")
+        check("empty used room is reaped after the TTL",
+              all(r["room"] != "TEMP" for r in json.loads(body)["rooms"]))
+
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")

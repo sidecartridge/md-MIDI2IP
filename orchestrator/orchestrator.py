@@ -33,6 +33,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import secrets
 import signal
 import socket
 from dataclasses import dataclass
@@ -47,6 +48,7 @@ _started_at = 0.0  # event-loop clock when serving began (for uptime)
 _listen_addr = ""  # "host:port" of the game TCP server, for display
 _inspect = False  # --inspect: decode the MIDI Maze protocol as traffic passes
 _admin_key = ""  # --admin-key: required for REST room writes (EPIC-14); "" refuses writes
+_room_ttl = 600.0  # --room-ttl: reap a used room empty for this long (seconds, EPIC-14)
 
 
 # --- MIDI Maze protocol inspection (in-line, read-only) --------------------
@@ -158,6 +160,11 @@ _bg_tasks: "set" = set()  # keep background lookups referenced so they aren't GC
 # carries TCP nodes and keyless WS nodes. The key arrives as Authorization: Bearer
 # on the WS handshake (D-14).
 DEFAULT_ROOM = ""
+MAX_PLAYERS_PER_ROOM = 16  # the MIDI Maze ring limit (D-04); an over-cap join is refused
+# Auto-generated room codes (POST /rooms with no key): short, uppercase, with the
+# ambiguous characters (O/0, I/1, L) removed so they are easy to read and type.
+_ROOM_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+_ROOM_CODE_LEN = 5
 
 
 def _normalize_room(key: "str | None") -> str:
@@ -335,10 +342,43 @@ class Rooms:
 
     def __init__(self) -> None:
         self._rooms: "dict[str, Registry]" = {DEFAULT_ROOM: Registry()}
+        self._used: "set[str]" = set()  # rooms that have had at least one player
+        self._empty_since: "dict[str, float]" = {}  # key -> when it went empty (for the reaper)
 
     def is_open(self, key: str) -> bool:
         """Whether a node may join this room (the default room or a provisioned one)."""
         return key == DEFAULT_ROOM or key in self._rooms
+
+    def is_full(self, key: str) -> bool:
+        """Whether the room is at the MIDI Maze player cap (D-04)."""
+        reg = self._rooms.get(key)
+        return reg is not None and len(reg) >= MAX_PLAYERS_PER_ROOM
+
+    def mark_used(self, key: str) -> None:
+        """Note that a player joined, so the reaper may later reclaim it when empty."""
+        self._used.add(key)
+        self._empty_since.pop(key, None)
+
+    def reap_empty(self, now: float, ttl: float) -> "list[str]":
+        """Delete non-default rooms that have been empty past `ttl` since they were
+        used. Returns the reaped keys. A provisioned-but-never-joined room is left
+        alone (it is removed by an explicit DELETE)."""
+        reaped = []
+        for key in list(self._rooms):
+            if key == DEFAULT_ROOM or key not in self._used:
+                continue
+            if len(self._rooms[key]) > 0:
+                self._empty_since.pop(key, None)
+                continue
+            started = self._empty_since.get(key)
+            if started is None:
+                self._empty_since[key] = now
+            elif now - started > ttl:
+                del self._rooms[key]
+                self._empty_since.pop(key, None)
+                self._used.discard(key)
+                reaped.append(key)
+        return reaped
 
     def get(self, key: str) -> Registry:
         """The room's ring. Falls back to the default room if the key is unknown
@@ -365,8 +405,11 @@ class Rooms:
         return self._rooms.get(key)
 
     def summaries(self) -> "list[dict]":
-        """A per-room summary for GET /rooms (room key + player count)."""
-        return [{"room": k, "players": len(r)} for k, r in self._rooms.items()]
+        """A per-room summary for GET /rooms (room key + player count + cap)."""
+        return [
+            {"room": k, "players": len(r), "cap": MAX_PLAYERS_PER_ROOM}
+            for k, r in self._rooms.items()
+        ]
 
     def all_players(self) -> "list[Player]":
         return [p for reg in self._rooms.values() for p in reg.players()]
@@ -447,6 +490,14 @@ async def handle_conn(conn: "Conn", room_key: str = DEFAULT_ROOM) -> None:
         elif _is_stalled(existing, now):
             _drop_player(existing, f"superseded (prior connection stalled) by reconnection from {ip}")
 
+    # Capacity (D-04): the ring caps at MAX_PLAYERS_PER_ROOM. handle_ws refuses an
+    # over-cap WS join with 403 before the handshake; this is the definitive check
+    # (covers TCP and any race after the dedup above freed/used a slot).
+    if len(reg) >= MAX_PLAYERS_PER_ROOM:
+        LOG.warning("room '%s' full (%d); refusing %s", room_key, len(reg), peer)
+        conn.close()
+        return
+
     player = Player(
         id=next(_next_id),
         peer=peer,
@@ -457,6 +508,7 @@ async def handle_conn(conn: "Conn", room_key: str = DEFAULT_ROOM) -> None:
         room=room_key,
     )
     reg.add(player)
+    rooms.mark_used(room_key)  # the reaper may reclaim it once it empties (STORY-04)
     player.host = ip  # until the reverse-DNS lookup resolves it
     task = asyncio.ensure_future(_resolve_host(player))  # best-effort PTR, off the relay
     _bg_tasks.add(task)
@@ -560,6 +612,12 @@ async def handle_ws(
             await writer.drain()
             writer.close()
             return
+        # Capacity (D-04): refuse an over-cap join up front (handle_conn re-checks).
+        if rooms.is_full(room_key):
+            writer.write(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+            writer.close()
+            return
         writer.write(ws.handshake_response(key))
         await writer.drain()
     except (ConnectionError, OSError):
@@ -594,6 +652,7 @@ def _status_snapshot(room: str = DEFAULT_ROOM) -> dict:
         "listen": _listen_addr,
         "room": room,
         "players_online": len(players),
+        "cap": MAX_PLAYERS_PER_ROOM,
         "ring": [p.id for p in players],  # ring order = insertion order, wraps
         "players": [
             {
@@ -706,6 +765,14 @@ def _valid_room(key: str) -> bool:
     return 1 <= len(key) <= 16 and key.isascii() and key.isalnum()
 
 
+def _gen_room_code() -> str:
+    """A short, unambiguous, unique room code for POST /rooms with no key."""
+    while True:
+        code = "".join(secrets.choice(_ROOM_CODE_ALPHABET) for _ in range(_ROOM_CODE_LEN))
+        if not rooms.is_open(code):
+            return code
+
+
 def _room_key_from_body(body: bytes) -> str:
     """Pull the room key from a POST /rooms body: JSON {"key": ...}, `key=VALUE`,
     or the raw body."""
@@ -749,7 +816,9 @@ async def _route_http(writer: asyncio.StreamWriter, method: str, path: str,
             await _http_send(writer, "403 Forbidden", b'{"error":"admin key required"}')
             return
         key = _normalize_room(_room_key_from_body(body))
-        if not _valid_room(key):
+        if key == "":
+            key = _gen_room_code()  # no key given: mint a short auto code (STORY-04)
+        elif not _valid_room(key):
             await _http_send(writer, "400 Bad Request", b'{"error":"invalid room key"}')
             return
         created = rooms.create(key)
@@ -820,12 +889,24 @@ async def handle_http(
             pass
 
 
+async def _room_reaper(ttl: float) -> None:
+    """Periodically reap used rooms that have been empty past `ttl` (EPIC-14
+    STORY-04). The default room is never reaped; never-joined rooms are left alone."""
+    interval = max(0.5, min(15.0, ttl / 2))
+    while True:
+        await asyncio.sleep(interval)
+        reaped = rooms.reap_empty(asyncio.get_event_loop().time(), ttl)
+        for key in reaped:
+            LOG.info("reaped empty room '%s' (idle > %ss)", key, int(ttl))
+
+
 async def serve(host: str, port: int, http_port: int, enable_http: bool = True,
                 ws_enabled: bool = False, ws_port: int = 5006) -> None:
     global _started_at, _listen_addr
     loop = asyncio.get_event_loop()
     _started_at = loop.time()
     _listen_addr = f"{host}:{port}"
+    reaper = asyncio.ensure_future(_room_reaper(_room_ttl))  # EPIC-14 empty-room TTL
 
     # Clean shutdown via signals (asyncio-idiomatic; KeyboardInterrupt in main()
     # is the fallback where add_signal_handler isn't supported, e.g. Windows).
@@ -861,6 +942,7 @@ async def serve(host: str, port: int, http_port: int, enable_http: bool = True,
         # start_server is already accepting; stay alive until asked to stop.
         await stop
     finally:
+        reaper.cancel()  # stop the empty-room reaper
         # Close active player connections FIRST (unblocks their idle reader.read),
         # then the listeners. We deliberately do NOT use `async with` /
         # `await server.wait_closed()`: on Python 3.13+ that blocks until every
@@ -915,10 +997,16 @@ def main() -> None:
         help="admin key for the rooms REST API (EPIC-14): create/delete need it via "
              "an X-Admin-Key header. Unset refuses writes; the default room still works.",
     )
+    parser.add_argument(
+        "--room-ttl", type=float, default=600.0,
+        help="reap a used room after it has been empty this many seconds "
+             "(EPIC-14; default 600). The default room is never reaped.",
+    )
     args = parser.parse_args()
-    global _inspect, _admin_key
+    global _inspect, _admin_key, _room_ttl
     _inspect = args.inspect
     _admin_key = args.admin_key or ""
+    _room_ttl = args.room_ttl
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
