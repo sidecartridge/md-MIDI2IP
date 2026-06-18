@@ -33,9 +33,11 @@ import asyncio
 import ipaddress
 import json
 import logging
+import os
 import secrets
 import signal
 import socket
+import time
 from dataclasses import dataclass
 from itertools import count
 
@@ -49,6 +51,7 @@ _listen_addr = ""  # "host:port" of the game TCP server, for display
 _inspect = False  # --inspect: decode the MIDI Maze protocol as traffic passes
 _admin_key = ""  # --admin-key: required for REST room writes (EPIC-14); "" refuses writes
 _room_ttl = 600.0  # --room-ttl: reap a used room empty for this long (seconds, EPIC-14)
+_rooms_file = ""  # --rooms-file: persist provisioned rooms here (EPIC-14); "" = in-memory
 
 
 # --- MIDI Maze protocol inspection (in-line, read-only) --------------------
@@ -344,6 +347,13 @@ class Rooms:
         self._rooms: "dict[str, Registry]" = {DEFAULT_ROOM: Registry()}
         self._used: "set[str]" = set()  # rooms that have had at least one player
         self._empty_since: "dict[str, float]" = {}  # key -> when it went empty (for the reaper)
+        self._meta: "dict[str, dict]" = {}  # key -> {created_at, name}, for persistence
+        self._path = ""  # persistence file (EPIC-14 STORY-05); "" = in-memory only
+
+    def set_persist(self, path: str) -> None:
+        """Enable persistence at `path` and load any saved rooms (EPIC-14 STORY-05)."""
+        self._path = path or ""
+        self._load()
 
     def is_open(self, key: str) -> bool:
         """Whether a node may join this room (the default room or a provisioned one)."""
@@ -375,10 +385,48 @@ class Rooms:
                 self._empty_since[key] = now
             elif now - started > ttl:
                 del self._rooms[key]
+                self._meta.pop(key, None)
                 self._empty_since.pop(key, None)
                 self._used.discard(key)
                 reaped.append(key)
+        if reaped:
+            self._save()
         return reaped
+
+    def _save(self) -> None:
+        """Write the provisioned rooms (key + metadata) to the persistence file, if
+        enabled. The default room and per-room player state are not stored."""
+        if not self._path:
+            return
+        data = {"rooms": [{"key": k, **self._meta.get(k, {})}
+                          for k in self._rooms if k != DEFAULT_ROOM]}
+        try:
+            tmp = self._path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2)
+            os.replace(tmp, self._path)  # atomic on POSIX
+        except OSError as exc:
+            LOG.warning("could not save rooms file %s: %s", self._path, exc)
+
+    def _load(self) -> None:
+        """Load provisioned rooms from the file (empty Registries). A missing or
+        corrupt file starts clean."""
+        if not self._path or not os.path.exists(self._path):
+            return
+        try:
+            with open(self._path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError) as exc:
+            LOG.warning("could not read rooms file %s: %s (starting empty)",
+                        self._path, exc)
+            return
+        for entry in data.get("rooms", []):
+            key = _normalize_room(entry.get("key", ""))
+            if key and key not in self._rooms:
+                self._rooms[key] = Registry()
+                self._meta[key] = {"created_at": entry.get("created_at"),
+                                   "name": entry.get("name", "")}
+        LOG.info("loaded %d room(s) from %s", len(self._meta), self._path)
 
     def get(self, key: str) -> Registry:
         """The room's ring. Falls back to the default room if the key is unknown
@@ -387,11 +435,13 @@ class Rooms:
         reg = self._rooms.get(key)
         return reg if reg is not None else self._rooms[DEFAULT_ROOM]
 
-    def create(self, key: str) -> bool:
+    def create(self, key: str, name: str = "") -> bool:
         """Provision a room. Returns True if it was newly created."""
         if key in self._rooms:
             return False
         self._rooms[key] = Registry()
+        self._meta[key] = {"created_at": time.time(), "name": name}
+        self._save()
         return True
 
     def delete(self, key: str) -> "list[Player] | None":
@@ -399,7 +449,12 @@ class Rooms:
         default room or does not exist."""
         if key == DEFAULT_ROOM or key not in self._rooms:
             return None
-        return self._rooms.pop(key).players()
+        players = self._rooms.pop(key).players()
+        self._meta.pop(key, None)
+        self._used.discard(key)
+        self._empty_since.pop(key, None)
+        self._save()
+        return players
 
     def registry(self, key: str) -> "Registry | None":
         return self._rooms.get(key)
@@ -931,6 +986,7 @@ async def serve(host: str, port: int, http_port: int, enable_http: bool = True,
     loop = asyncio.get_event_loop()
     _started_at = loop.time()
     _listen_addr = f"{host}:{port}"
+    rooms.set_persist(_rooms_file)  # EPIC-14 STORY-05: load any saved rooms
     reaper = asyncio.ensure_future(_room_reaper(_room_ttl))  # EPIC-14 empty-room TTL
 
     # Clean shutdown via signals (asyncio-idiomatic; KeyboardInterrupt in main()
@@ -1027,11 +1083,17 @@ def main() -> None:
         help="reap a used room after it has been empty this many seconds "
              "(EPIC-14; default 600). The default room is never reaped.",
     )
+    parser.add_argument(
+        "--rooms-file", default="",
+        help="persist provisioned rooms to this JSON file and reload them on start "
+             "(EPIC-14). Unset keeps rooms in memory only.",
+    )
     args = parser.parse_args()
-    global _inspect, _admin_key, _room_ttl
+    global _inspect, _admin_key, _room_ttl, _rooms_file
     _inspect = args.inspect
     _admin_key = args.admin_key or ""
     _room_ttl = args.room_ttl
+    _rooms_file = args.rooms_file or ""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )

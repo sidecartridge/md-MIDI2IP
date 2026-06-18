@@ -23,6 +23,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -453,6 +454,29 @@ def main() -> int:
               "<select id='room'" in page and "fetch('rooms'" in page)
         wsa.close()
         tcp.close()
+
+    # Phase J — room persistence across restart (EPIC-14 STORY-05).
+    rooms_file = os.path.join(tempfile.mkdtemp(prefix="midi-rooms-"), "rooms.json")
+    with server(5079, 8079, "--admin-key", "K", "--rooms-file", rooms_file):
+        print("room persistence (restart):")
+        code, _ = http_req(8079, "POST", "/rooms", b'{"key":"SAVED"}', {"X-Admin-Key": "K"})
+        check("room created before restart", code == 200)
+    # New server (different ports) sharing the same rooms file: the room is restored.
+    with server(5076, 8076, "--ws", "--ws-port", "5075", "--admin-key", "K",
+                "--rooms-file", rooms_file):
+        _, body = http_req(8076, "GET", "/rooms")
+        check("room restored after restart",
+              any(r["room"] == "SAVED" for r in json.loads(body)["rooms"]))
+        sav, oksav = ws_connect(5075, room="SAVED")
+        check("restored room is joinable", oksav)
+        sav.close()
+    # A missing rooms file starts clean (no crash).
+    missing = os.path.join(tempfile.mkdtemp(prefix="midi-rooms-"), "none.json")
+    with server(5074, 8074, "--admin-key", "K", "--rooms-file", missing):
+        code, body = http_req(8074, "GET", "/rooms")
+        check("missing rooms file starts clean",
+              code == 200 and all(r["room"] != "SAVED"
+                                  for r in json.loads(body)["rooms"]))
 
     print()
     if _failures:

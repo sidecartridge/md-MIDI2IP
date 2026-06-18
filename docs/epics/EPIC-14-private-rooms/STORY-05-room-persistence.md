@@ -2,7 +2,7 @@
 id: STORY-05
 epic: EPIC-14
 title: Room persistence across an orchestrator restart
-status: todo
+status: done
 ---
 
 ## Goal
@@ -12,11 +12,11 @@ every time.
 
 ## Tasks
 
-- [ ] Persist the provisioned room list (key plus metadata: created-at, optional name) to a JSON file at `--rooms-file` (default alongside the orchestrator)
-- [ ] Load the file on startup so the rooms exist again after a restart; the default room is implicit and not stored
-- [ ] Write on every create / delete; tolerate a missing or corrupt file by starting empty and logging a warning
-- [ ] Keep it stdlib (`json` + a plain file), no database
-- [ ] selftest: create a room, reload from the file (or restart the server in the harness), and the room is still present and joinable; a missing file starts clean
+- [x] Persist the provisioned room list (key plus metadata: created-at, optional name) to a JSON file at `--rooms-file` (default alongside the orchestrator)
+- [x] Load the file on startup so the rooms exist again after a restart; the default room is implicit and not stored
+- [x] Write on every create / delete; tolerate a missing or corrupt file by starting empty and logging a warning
+- [x] Keep it stdlib (`json` + a plain file), no database
+- [x] selftest: create a room, reload from the file (or restart the server in the harness), and the room is still present and joinable; a missing file starts clean
 
 ## Acceptance
 
