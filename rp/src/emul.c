@@ -197,6 +197,11 @@ static void menu(void) {
   term_printString("[E]xit to GEM     [X] Booster\n");
   term_markMenuPromptCursor();
   menuRefreshTime = make_timeout_time_ms(MENU_REFRESH_TIME_MS);
+  // Sync the change-detection baseline to what we just drew, so a later status
+  // change (e.g. the reconnect after a [H]ost/[P]ort/[T]ransport/[R]oom edit
+  // calls midi_net_reload) is detected and re-rendered instead of comparing
+  // against a stale signature.
+  statusSignature(lastStatusSig, sizeof(lastStatusSig));
 }
 
 // Command handlers
