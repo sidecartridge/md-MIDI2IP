@@ -671,8 +671,18 @@ def _status_snapshot(room: str = DEFAULT_ROOM) -> dict:
     }
 
 
-def _status_json() -> bytes:
-    return json.dumps(_status_snapshot(), indent=2).encode("utf-8")
+def _status_json(room: str = DEFAULT_ROOM) -> bytes:
+    return json.dumps(_status_snapshot(room), indent=2).encode("utf-8")
+
+
+def _query_param(path: str, name: str) -> str:
+    """Pull a query parameter value from a request path (e.g. ?room=ALPHA)."""
+    query = path.split("?", 1)[1] if "?" in path else ""
+    for part in query.split("&"):
+        pname, _, value = part.partition("=")
+        if pname == name:
+            return value
+    return ""
 
 
 # Self-contained ring-visualization page (STORY-05): no external/CDN deps. It
@@ -690,6 +700,8 @@ _STATUS_PAGE = (
     "header{padding:.7em 1.1em;border-bottom:1px solid #21262d}"
     "h1{font-size:1.05em;margin:0}"
     "#meta{color:#8b949e;font-size:.85em;margin-top:.3em}"
+    "#roombar{color:#8b949e;font-size:.85em;margin-top:.3em}"
+    "#room{background:#161b22;color:#d8dee9;border:1px solid #30363d;padding:.15em .3em}"
     "svg{display:block;width:100%;height:82vh}"
     ".node circle{fill:#161b22;stroke:#4f9cff;stroke-width:2}"
     ".node.stalled circle{stroke:#5a6068}"
@@ -700,7 +712,8 @@ _STATUS_PAGE = (
     ".empty{fill:#8b949e;font-size:15px;text-anchor:middle}"
     "</style></head><body>"
     "<header><h1>MIDI-to-IP orchestrator</h1>"
-    "<div id='meta'>connecting...</div></header>"
+    "<div id='meta'>connecting...</div>"
+    "<div id='roombar'>room: <select id='room'></select></div></header>"
     "<svg viewBox='0 0 800 600' preserveAspectRatio='xMidYMid meet'>"
     "<defs><marker id='a' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' "
     "markerHeight='7' orient='auto-start-reverse'>"
@@ -708,16 +721,27 @@ _STATUS_PAGE = (
     "<g id='edges'></g><g id='nodes'></g></svg>"
     "<script>"
     "const NS='http://www.w3.org/2000/svg',STALE=10,CX=400,CY=300,R=205;"
+    "const sel=document.getElementById('room');let roomSig=null;"
     "function el(t,a,p){const e=document.createElementNS(NS,t);"
     "for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e}"
     "function pos(i,n){if(n===1)return[CX,CY];"
     "const g=(i/n)*2*Math.PI-Math.PI/2;return[CX+R*Math.cos(g),CY+R*Math.sin(g)]}"
-    "async function tick(){let s;"
-    "try{s=await(await fetch('status.json',{cache:'no-store'})).json()}"
+    # room selector: refresh the dropdown from /rooms, but rebuild only when the
+    # set of rooms changes (so the user's selection is not disturbed each tick).
+    "async function loadRooms(){try{"
+    "const d=await(await fetch('rooms',{cache:'no-store'})).json();"
+    "const rs=d.rooms||[],sig=rs.map(r=>r.room).join('|');if(sig===roomSig)return;"
+    "roomSig=sig;const cur=sel.value;sel.textContent='';for(const r of rs){"
+    "const o=el('option',{value:r.room},sel);"
+    "o.textContent=(r.room||'(default)')+' ('+r.players+'/'+r.cap+')';}"
+    "if(rs.some(r=>r.room===cur))sel.value=cur;}catch(e){}}"
+    "async function tick(){await loadRooms();const rk=sel.value;let s;"
+    "try{s=await(await fetch('status.json'+(rk?('?room='+encodeURIComponent(rk)):''),"
+    "{cache:'no-store'})).json()}"
     "catch(e){document.getElementById('meta').textContent="
     "'orchestrator unreachable (retrying)';return}"
-    "document.getElementById('meta').textContent='uptime '+s.uptime_s+'s | game '"
-    "+s.listen+' | '+s.players_online+' online';"
+    "document.getElementById('meta').textContent='room '+(s.room||'(default)')+' | uptime '"
+    "+s.uptime_s+'s | '+s.players_online+'/'+s.cap+' online';"
     "const E=document.getElementById('edges'),N=document.getElementById('nodes');"
     "E.textContent='';N.textContent='';"
     "const ps=s.players||[],n=ps.length;"
@@ -806,7 +830,8 @@ async def _route_http(writer: asyncio.StreamWriter, method: str, path: str,
     """Route one HTTP request: the status page / JSON, and the EPIC-14 rooms REST."""
     path_only = path.split("?", 1)[0]
     if method == "GET" and path_only == "/status.json":
-        await _http_send(writer, "200 OK", _status_json())
+        room = _normalize_room(_query_param(path, "room"))  # ?room=KEY (EPIC-14)
+        await _http_send(writer, "200 OK", _status_json(room))
         return
     if method == "GET" and path_only == "/rooms":
         await _http_send(writer, "200 OK", _rooms_json())

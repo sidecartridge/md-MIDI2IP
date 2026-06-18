@@ -434,6 +434,26 @@ def main() -> int:
         check("empty used room is reaped after the TTL",
               all(r["room"] != "TEMP" for r in json.loads(body)["rooms"]))
 
+    # Phase I — room-aware status + UI (EPIC-14 STORY-06): status.json?room scopes
+    # to a room, the default room is separate, and the page carries a room selector.
+    with server(5081, 8081, "--ws", "--ws-port", "5080", "--admin-key", "K"):
+        print("room-aware status + UI:")
+        http_req(8081, "POST", "/rooms", b'{"key":"ALPHA"}', {"X-Admin-Key": "K"})
+        wsa = ws_connect(5080, room="ALPHA")[0]
+        tcp = conn(5081)  # TCP node -> default room
+        time.sleep(0.3)
+        sj_a = json.loads(http_req(8081, "GET", "/status.json?room=ALPHA")[1])
+        check("status.json?room scopes to the room",
+              sj_a["room"] == "ALPHA" and sj_a["players_online"] == 1)
+        sj_d = json.loads(http_req(8081, "GET", "/status.json")[1])
+        check("status.json with no param is the default room",
+              sj_d["room"] == "" and sj_d["players_online"] == 1)
+        page = http_req(8081, "GET", "/")[1].decode("utf-8")
+        check("ring view has a room selector polling rooms",
+              "<select id='room'" in page and "fetch('rooms'" in page)
+        wsa.close()
+        tcp.close()
+
     print()
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")

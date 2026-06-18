@@ -2,7 +2,7 @@
 id: STORY-06
 epic: EPIC-14
 title: Room-aware status.json + web ring-view room selector
-status: todo
+status: done
 ---
 
 ## Goal
@@ -12,11 +12,11 @@ per-room.
 
 ## Tasks
 
-- [ ] `GET /status.json?room=KEY` returns that room's snapshot (players, ring) in the existing schema; no param means the default room
-- [ ] `GET /rooms` returns the room list with a player count per room (also feeds the selector)
-- [ ] The ring view adds a room dropdown populated from `/rooms`; selecting a room polls `status.json?room=KEY` and draws that ring
-- [ ] Show the selected room key in the page header
-- [ ] selftest: `status.json?room=KEY` scopes to one room; `/rooms` lists rooms with counts; the page contains the selector and still draws the ring
+- [x] `GET /status.json?room=KEY` returns that room's snapshot (players, ring) in the existing schema; no param means the default room
+- [x] `GET /rooms` returns the room list with a player count per room (also feeds the selector)
+- [x] The ring view adds a room dropdown populated from `/rooms`; selecting a room polls `status.json?room=KEY` and draws that ring
+- [x] Show the selected room key in the page header
+- [x] selftest: `status.json?room=KEY` scopes to one room; `/rooms` lists rooms with counts; the page contains the selector and still draws the ring
 
 ## Acceptance
 
