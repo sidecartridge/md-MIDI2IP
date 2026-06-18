@@ -12,7 +12,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 3 | Hardware test pass: ST + Hatari verification checklist | in progress |
 | 4 | Optional WebSocket transport (TCP or WebSocket) | done |
 | 5 | Private rooms (room-key MIDI rings) | done |
-| 6 | Robustness pass: buffer cleanup on disconnect | in progress |
+| 6 | Robustness pass: buffer cleanup on disconnect | done |
 
 ---
 
@@ -170,6 +170,16 @@ closes.
 
 | Epic | Status | Note |
 | --- | --- | --- |
-| EPIC-15 · Robustness pass | todo | flush the firmware OUT queue on a drop, confirm the orchestrator + gateway drop everything on disconnect, validate reconnects on hardware |
+| EPIC-15 · Robustness pass | done | flush the firmware OUT queue on a drop, confirm the orchestrator + gateway drop everything on disconnect, validate reconnects on hardware |
 
-**Outcome:** pending.
+**Outcome:** EPIC-15 landed: a connection drop no longer leaves stale bytes. The firmware
+`midi_net_reset` cleared only the IN queue, so a reconnect within the 1 s stale window
+replayed queued `Bconout` bytes; a shared `midi_net_flush_all` now drops both the IN and the
+OUT queues and resets the WebSocket receive state on every drop path (reset and the lwIP
+error callback). The orchestrator was confirmed to hold nothing to replay (it relays
+directly, and a close discards the bounded write buffer and the frame-decoder state), with a
+"drop leaves nothing queued" selftest and a documented buffering model; the gateway keeps no
+cross-session state. Validated on real hardware: a reconnect mid-config and mid-game does not
+poison the ring. The master-takeover case was confirmed to be expected MIDI Maze behavior
+(a master does not recirculate an election byte) and was dropped from scope. **Iteration
+complete.**
