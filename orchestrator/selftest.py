@@ -122,17 +122,20 @@ def http_req(http_port: int, method: str, path: str, body: "bytes | None" = None
         return exc.code, exc.read()
 
 
-def ws_connect(port: int, room: str = "") -> "tuple[socket.socket, bool]":
+def ws_connect(port: int, room: str = "", room_in_query: bool = False) -> "tuple[socket.socket, bool]":
     """Open a TCP socket and run the RFC 6455 client handshake. Returns the socket
     and whether the server answered 101 with the right Sec-WebSocket-Accept. An
-    optional room key is sent as Authorization: Bearer (EPIC-14)."""
+    optional room key is sent as Authorization: Bearer (EPIC-14), or, when
+    room_in_query is set, as a ?room= query param on the path (the browser path,
+    since browsers cannot set request headers on a WebSocket)."""
     s = socket.create_connection((HOST, port))
     s.settimeout(2.0)
     key = base64.b64encode(os.urandom(16)).decode("ascii")
-    auth = f"Authorization: Bearer {room}\r\n" if room else ""
+    auth = f"Authorization: Bearer {room}\r\n" if room and not room_in_query else ""
+    path = f"/?room={room}" if room and room_in_query else "/"
     s.sendall(
         (
-            f"GET / HTTP/1.1\r\nHost: {HOST}:{port}\r\nUpgrade: websocket\r\n"
+            f"GET {path} HTTP/1.1\r\nHost: {HOST}:{port}\r\nUpgrade: websocket\r\n"
             f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
             f"{auth}Sec-WebSocket-Version: 13\r\n\r\n"
         ).encode("latin-1")
@@ -361,6 +364,17 @@ def main() -> int:
         ws_send(b1, b"\x99")
         check("other room is its own ring (BETA echoes to self)",
               ws_recv(b1, db1, 1) == b"\x99")
+
+        # Browser path: a ?room= query param joins the named room (browsers cannot
+        # set the Authorization header on a WebSocket). It lands in ALPHA, not BETA.
+        aq, okq = ws_connect(5088, room="ALPHA", room_in_query=True)
+        check("query-param room handshake completed", okq)
+        time.sleep(0.3)
+        sa = json.loads(http_req(8089, "GET", "/status.json?room=ALPHA")[1])
+        sb = json.loads(http_req(8089, "GET", "/status.json?room=BETA")[1])
+        check("query-param node joined ALPHA (3 online), not BETA (1 online)",
+              sa["players_online"] == 3 and sb["players_online"] == 1)
+        aq.close()
         a1.close()
         a2.close()
         b1.close()

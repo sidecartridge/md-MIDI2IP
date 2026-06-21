@@ -31,7 +31,9 @@ terminate TLS at a reverse proxy and speak `ws` internally.
 ## Rooms (private rings)
 
 One orchestrator hosts many private rings keyed by a room key. A WebSocket node presents
-its key as `Authorization: Bearer <key>`; a TCP or keyless node joins the default room.
+its key as `Authorization: Bearer <key>`, or, from a browser (which cannot set request
+headers on a WebSocket), as a `?room=<key>` query parameter on the WebSocket URL; a TCP or
+keyless node joins the default room.
 Rooms are pre-provisioned over REST (an unknown key is refused), each ring caps at 16
 players, and an empty room is reclaimed after `--room-ttl`.
 

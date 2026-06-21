@@ -87,8 +87,10 @@ Room key:
 
 - Human-typed and case-insensitive, normalized to uppercase. Characters `A-Z 0-9`, 1 to 16
   long (fits the firmware config and is easy to type). An empty key means the default room.
-- Carried on the WebSocket handshake as `Authorization: Bearer <roomkey>` (D-13). A TCP
-  node has no handshake, so it always joins the default room.
+- Carried on the WebSocket handshake as `Authorization: Bearer <roomkey>` (D-13), or, for
+  a browser (which cannot set request headers on a WebSocket), as a `?room=<roomkey>` query
+  parameter on the handshake path; the header wins when both are present. A TCP node has no
+  handshake, so it always joins the default room.
 
 Provisioning (REST, on the HTTP status port):
 

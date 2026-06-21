@@ -656,13 +656,18 @@ async def handle_ws(
 ) -> None:
     """WebSocket entry point (EPIC-13 STORY-03): run the RFC 6455 server handshake,
     then relay over a WebSocket carrier. EPIC-14: the room key arrives as
-    `Authorization: Bearer <roomkey>`; the connection joins that room's ring (a
-    missing key uses the default room)."""
+    `Authorization: Bearer <roomkey>` (firmware/gateway) or, for browsers that
+    cannot set request headers on a WebSocket, as a `?room=<roomkey>` query
+    parameter on the request path. The header wins when both are present; a
+    missing key uses the default room."""
     try:
         request_line = await reader.readline()
         if not request_line:
             writer.close()
             return
+        # Request target, e.g. "GET /ws?room=ALPHA HTTP/1.1" -> "/ws?room=ALPHA".
+        parts = request_line.decode("latin-1", "replace").split(" ")
+        request_path = parts[1] if len(parts) > 1 else ""
         raw_headers = bytearray()
         while True:  # read header lines up to the blank line
             line = await reader.readline()
@@ -676,9 +681,13 @@ async def handle_ws(
             await writer.drain()
             writer.close()
             return
-        # Room key from Authorization: Bearer <roomkey> (D-14); empty -> default room.
+        # Room key (D-14): Authorization: Bearer <roomkey> from the firmware/gateway,
+        # else the browser-usable ?room=<roomkey> query param; empty -> default room.
         auth = headers.get("authorization", "")
-        room_key = _normalize_room(auth[7:]) if auth[:7].lower() == "bearer " else DEFAULT_ROOM
+        if auth[:7].lower() == "bearer ":
+            room_key = _normalize_room(auth[7:])
+        else:
+            room_key = _normalize_room(_query_param(request_path, "room"))
         # Pre-provisioned rooms (D-14): refuse a join to a room that was not created.
         if not rooms.is_open(room_key):
             writer.write(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
