@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.1.1beta (2026-06-22)
 
 ### More reliable Wi-Fi (network latency fix)
 
