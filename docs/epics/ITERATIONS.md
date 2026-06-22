@@ -13,7 +13,8 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 4 | Optional WebSocket transport (TCP or WebSocket) | done |
 | 5 | Private rooms (room-key MIDI rings) | done |
 | 6 | Robustness pass: buffer cleanup on disconnect | done |
-| 7 | Network reliability & latency pass | in-progress |
+| 7 | Network reliability & latency pass | done |
+| 8 | Dockerized deployment (orchestrator + web app) | todo |
 
 ---
 
@@ -206,7 +207,7 @@ candidate.
 
 | Epic | Status | Note |
 | --- | --- | --- |
-| EPIC-16 · Network reliability & latency pass | in-progress | instrument poll-gap + ping to identify the dominant cause, then fix and validate on hardware |
+| EPIC-16 · Network reliability & latency pass | done | Wi-Fi power-save forced off (D-15); merged to main as v1.1.1beta (PR #15) |
 
 **Outcome:** the cause was Wi-Fi power-save, not the firmware loop. On-device poll-gap
 instrumentation (STORY-01) proved the Core-0 loop healthy (worst gap ~5.3 ms while idle RTT
@@ -219,5 +220,26 @@ callback re-enters the driver and no-ops), and the "disabled" constant was `0xa1
 (`PERFORMANCE_PM` with the mode nibble zeroed, still carrying a ~1 s listen interval) rather
 than the real `CYW43_NONE_PM` (`0x10`). Since power-save is incompatible with the lock-step
 ring (C-01), the firmware now **forces PM off unconditionally and ignores `WIFI_POWER`**
-(D-15). Validated on hardware: idle RTT is flat at single-digit ms. _Pending: a full-match
-regression check and merge to `main`._
+(D-15). Validated on hardware: idle RTT is flat at single-digit ms. **Merged to `main` as v1.1.1beta (PR #15); iteration complete.**
+
+
+---
+
+## Iteration 8: Dockerized deployment
+
+**Goal:** package the server side as a single Docker image that any server can run:
+`orchestrator.py` on all its ports (game TCP 5005, WebSocket 5006, HTTP/REST 8080,
+bound 0.0.0.0) plus the `midi-maze-js` browser game served as a static site on port
+80, both under one supervisor. After `docker run`, a browser plays through the
+orchestrator and remote hardware / Hatari nodes join the same rings. Decisions
+(D-16): single image, ports exposed directly, midi-maze-js as a git submodule, no
+TLS (plain http/ws), orchestrator parameters passed via env at run time, and rooms
+persisted to a mounted volume.
+
+**Epics**
+
+| Epic | Status | Note |
+| --- | --- | --- |
+| EPIC-17 · Dockerized deployment | todo | single image: orchestrator (all ports) + nginx-served midi-maze-js on :80, deployable anywhere |
+
+**Outcome:** _todo._
