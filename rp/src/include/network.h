@@ -52,7 +52,6 @@
 // li_assoc=10 (~1 s association listen interval), so the AP buffered frames and
 // idle RTT swung 100-900 ms even with pm_mode=NO_POWERSAVE (EPIC-16, D-15).
 #define NETWORK_POWER_MGMT_DISABLED 0x10
-#define NETWORK_POWER_MGMT_MAX_OPTIONS 5
 
 #define NETWORK_MAX_STRING_LENGTH 32
 

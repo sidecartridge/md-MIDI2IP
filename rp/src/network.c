@@ -462,36 +462,15 @@ int network_wifiInit(wifi_mode_t mode) {
     wifiCurrentMode = WIFI_MODE_AP;
   }
 
-  // Setting the power management
-  uint32_t pmValue = NETWORK_POWER_MGMT_DISABLED;  // 0: Disable PM
-  SettingsConfigEntry *pmEntry =
-      settings_find_entry(gconfig_getContext(), PARAM_WIFI_POWER);
-  if (pmEntry != NULL) {
-    pmValue = strtoul(pmEntry->value, NULL, HEX_BASE);
-  }
-  if (pmValue < NETWORK_POWER_MGMT_MAX_OPTIONS) {
-    switch (pmValue) {
-      case 0:
-        pmValue = NETWORK_POWER_MGMT_DISABLED;  // DISABLED_PM
-        break;
-      case 1:
-        pmValue = CYW43_PERFORMANCE_PM;  // PERFORMANCE_PM
-        break;
-      case 2:
-        pmValue = CYW43_AGGRESSIVE_PM;  // AGGRESSIVE_PM
-        break;
-      case 3:
-        pmValue = CYW43_DEFAULT_PM;  // DEFAULT_PM
-        break;
-      default:
-        pmValue = CYW43_NO_POWERSAVE_MODE;  // NO_POWERSAVE_MODE
-        break;
-    }
-  }
-  DPRINTF("Setting power management to: %08x\n", pmValue);
-  // Remember it; wifiLinkCallback re-applies it after association (EPIC-16).
-  staPmValue = pmValue;
-  cyw43_wifi_pm(&cyw43_state, pmValue);
+  // Wi-Fi power management: always OFF (EPIC-16, D-15). PARAM_WIFI_POWER is
+  // intentionally ignored — any power-save mode lets the radio sleep between
+  // beacons, which made idle ICMP RTT swing 5-660 ms and breaks MIDI Maze's
+  // lock-step ring (C-01). Remember the value so wifiLinkCallback re-applies it
+  // after association (a pre-join cyw43_wifi_pm does not stick).
+  staPmValue = NETWORK_POWER_MGMT_DISABLED;  // CYW43_NONE_PM
+  DPRINTF("Setting power management to: %08x (forced off, WIFI_POWER ignored)\n",
+          staPmValue);
+  cyw43_wifi_pm(&cyw43_state, staPmValue);
   return 0;
 }
 #endif
