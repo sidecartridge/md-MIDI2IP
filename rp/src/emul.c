@@ -615,6 +615,21 @@ void emul_start() {
   // For testing purposes, this app only shows commands to manage the settings
   DPRINTF("Start the app loop here\n");
   absolute_time_t nextNetPoll = get_absolute_time();
+#if defined(_DEBUG) && (_DEBUG != 0)
+  // EPIC-16 STORY-01: temporary network-poll instrumentation (debug build only;
+  // DPRINTF / UART stdio are compiled out in release). Optimization is MinSizeRel
+  // in both builds, so these numbers reflect the real timing. Over a rolling
+  // window it reports the worst gap between consecutive poll-block runs and the
+  // worst time spent in cyw43 poll / midi_net_poll / term_loop, to attribute
+  // ping-latency spikes to Core-0 poll starvation. Remove before STORY-02 ships.
+#define NET_INSTR_REPORT_MS 5000
+  absolute_time_t instrLastPoll = get_absolute_time();
+  absolute_time_t instrNextReport = make_timeout_time_ms(NET_INSTR_REPORT_MS);
+  int64_t instrMaxGapUs = 0;
+  int64_t instrMaxCyw43Us = 0;
+  int64_t instrMaxMidiUs = 0;
+  int64_t instrMaxTermUs = 0;
+#endif
   while (getKeepActive()) {
     // Drain the ROM3 command ring EVERY iteration: the m68k's MIDI commands
     // busy-wait on send_sync, so chandler_loop must run as often as possible.
@@ -626,12 +641,45 @@ void emul_start() {
     // link, and the terminal on a light cadence — none of these need per-byte
     // latency, and polling cyw43 every spin would saturate the SPI.
     if (absolute_time_diff_us(get_absolute_time(), nextNetPoll) <= 0) {
+#if defined(_DEBUG) && (_DEBUG != 0)
+      absolute_time_t instrT0 = get_absolute_time();
+      int64_t instrGap = absolute_time_diff_us(instrLastPoll, instrT0);
+      if (instrGap > instrMaxGapUs) instrMaxGapUs = instrGap;
+      instrLastPoll = instrT0;
+#endif
 #if PICO_CYW43_ARCH_POLL
       network_safePoll();
 #endif
+#if defined(_DEBUG) && (_DEBUG != 0)
+      absolute_time_t instrT1 = get_absolute_time();
+#endif
       midi_net_poll();  // drive the orchestrator TCP connection
+#if defined(_DEBUG) && (_DEBUG != 0)
+      absolute_time_t instrT2 = get_absolute_time();
+#endif
       term_loop();      // terminal foreground (consume command, render output)
       nextNetPoll = make_timeout_time_ms(NET_POLL_MS);
+#if defined(_DEBUG) && (_DEBUG != 0)
+      absolute_time_t instrT3 = get_absolute_time();
+      int64_t instrCyw43 = absolute_time_diff_us(instrT0, instrT1);
+      int64_t instrMidi = absolute_time_diff_us(instrT1, instrT2);
+      int64_t instrTerm = absolute_time_diff_us(instrT2, instrT3);
+      if (instrCyw43 > instrMaxCyw43Us) instrMaxCyw43Us = instrCyw43;
+      if (instrMidi > instrMaxMidiUs) instrMaxMidiUs = instrMidi;
+      if (instrTerm > instrMaxTermUs) instrMaxTermUs = instrTerm;
+      if (absolute_time_diff_us(get_absolute_time(), instrNextReport) <= 0) {
+        DPRINTF(
+            "net-instr[%dms]: worst gap=%lld us | cyw43=%lld midi=%lld "
+            "term=%lld us\n",
+            NET_INSTR_REPORT_MS, instrMaxGapUs, instrMaxCyw43Us, instrMaxMidiUs,
+            instrMaxTermUs);
+        instrMaxGapUs = 0;
+        instrMaxCyw43Us = 0;
+        instrMaxMidiUs = 0;
+        instrMaxTermUs = 0;
+        instrNextReport = make_timeout_time_ms(NET_INSTR_REPORT_MS);
+      }
+#endif
     }
 
     // Boot countdown (md-drives-emulator style): ANY keystroke halts it; while
