@@ -46,7 +46,12 @@
 #define NETWORK_POLLING_INTERVAL 100  // 100 ms
 #define NETWORK_CONNECT_TIMEOUT 30    // 30 seconds
 
-#define NETWORK_POWER_MGMT_DISABLED 0xa11140
+// CYW43_NONE_PM = cyw43_pm_value(CYW43_NO_POWERSAVE_MODE, 10, 0, 0, 0).
+// Kept as a literal so it stays a constant initializer. The previous value
+// 0xa11140 was PERFORMANCE_PM with the mode nibble zeroed: it still carried
+// li_assoc=10 (~1 s association listen interval), so the AP buffered frames and
+// idle RTT swung 100-900 ms even with pm_mode=NO_POWERSAVE (EPIC-16, D-15).
+#define NETWORK_POWER_MGMT_DISABLED 0x10
 #define NETWORK_POWER_MGMT_MAX_OPTIONS 5
 
 #define NETWORK_MAX_STRING_LENGTH 32

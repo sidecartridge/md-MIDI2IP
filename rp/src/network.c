@@ -617,6 +617,7 @@ static void wifiLinkCallback(struct netif *netif) {
     // chip falls back to its default PM2 power-save, which made idle ICMP RTT
     // swing 5-660 ms (low only under continuous traffic). Re-applying here also
     // covers reconnects.
+    DPRINTF("Re-applying Wi-Fi PM after link-up: %08x\n", staPmValue);
     cyw43_wifi_pm(&cyw43_state, staPmValue);
   } else {
     // Drop currentIp / status / status string so callers don't keep

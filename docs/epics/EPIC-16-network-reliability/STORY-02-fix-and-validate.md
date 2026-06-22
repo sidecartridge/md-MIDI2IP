@@ -38,8 +38,8 @@ MIDI Maze match runs without drops on hardware.
 3. `ping` the Pico ≥ 60 s idle and during a match while watching UART0 @ 115200.
    Expected: the `net-instr` worst gap stays ~ms (unchanged — the loop was always
    healthy) while **idle RTT collapses to single-digit ms** with no 100-400 ms
-   spikes. Confirm `Setting power management to: 00a11140` and a `WiFi Link: UP`
-   line appear in the log.
+   spikes. Confirm the log shows `Re-applying Wi-Fi PM after link-up: 00000010` (and a
+   `WiFi Link: UP` line). `00000010` = CYW43_NONE_PM; the old broken value was 00a11140.
 4. Confirm no MIDI Maze regression (byte-exact ring, master election, reconnect).
 5. Once validated, **remove the STORY-01 instrumentation** from `emul.c` before this
    ships.
