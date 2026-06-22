@@ -33,12 +33,12 @@
 #include "term.h"
 
 #define SLEEP_LOOP_MS 100
-// Wi-Fi / terminal poll cadence. chandler_loop() — which services the m68k's
-// busy-waiting MIDI commands (send_sync) — runs EVERY loop iteration, so a byte
-// is handled in ~µs; only the network/terminal poll is throttled to this
-// interval. A wait around chandler_loop() instead would cost ~that-many ms PER
-// MIDI byte and break MIDI Maze's lock-step ring (C-01).
-#define NET_POLL_MS 1
+
+// EPIC-16 TEST ONLY: pace the hot loop by yielding up to this many ms per
+// iteration (cyw43_arch_wait_for_work_until, which wakes early on network work).
+// Set to 0 to disable. WARNING: it also gates chandler_loop(), so MIDI handling
+// can stall up to this long (C-01/D-12) — keep it small; experiments only.
+#define LOOP_TEST_WAIT_MS 1
 
 enum {
   APP_MODE_SETUP = 255  // Setup
@@ -614,7 +614,6 @@ void emul_start() {
   // The main loop runs until the user decides to exit.
   // For testing purposes, this app only shows commands to manage the settings
   DPRINTF("Start the app loop here\n");
-  absolute_time_t nextNetPoll = get_absolute_time();
   while (getKeepActive()) {
     // Drain the ROM3 command ring EVERY iteration: the m68k's MIDI commands
     // busy-wait on send_sync, so chandler_loop must run as often as possible.
@@ -623,16 +622,14 @@ void emul_start() {
     chandler_loop();
 
     // Service Wi-Fi/lwIP (network_safePoll == cyw43_arch_poll), the orchestrator
-    // link, and the terminal on a light cadence — none of these need per-byte
-    // latency, and polling cyw43 every spin would saturate the SPI.
-    if (absolute_time_diff_us(get_absolute_time(), nextNetPoll) <= 0) {
+    // link, and the terminal once per iteration. No explicit cadence gate is
+    // needed: cyw43_arch_wait_for_work_until() at the end of the loop paces it
+    // and wakes on network work, so this no longer free-spins the cyw43 SPI.
 #if PICO_CYW43_ARCH_POLL
-      network_safePoll();
+    network_safePoll();
 #endif
-      midi_net_poll();  // drive the orchestrator TCP connection
-      term_loop();      // terminal foreground (consume command, render output)
-      nextNetPoll = make_timeout_time_ms(NET_POLL_MS);
-    }
+    midi_net_poll();  // drive the orchestrator TCP connection
+    term_loop();      // terminal foreground (consume command, render output)
 
     // Boot countdown (md-drives-emulator style): ANY keystroke halts it; while
     // running it updates only the bottom bar (no menu redraw); on expiry it
@@ -681,6 +678,20 @@ void emul_start() {
         }
       }
     }
+
+#if defined(LOOP_TEST_WAIT_MS) && (LOOP_TEST_WAIT_MS > 0)
+    // EPIC-16 TEST ONLY: pace the hot loop. cyw43_arch_wait_for_work_until()
+    // yields the CPU but wakes early when the CYW43/network has work (better than
+    // a busy wait, which would also delay inbound traffic). NOTE: commemul has no
+    // IRQ, so this does NOT wake on m68k MIDI commands — the timeout is the only
+    // bound on how long chandler_loop()/MIDI can stall, so keep it SMALL (never
+    // SLEEP_LOOP_MS=100 ms, which would break the ring; C-01/D-12).
+#if PICO_CYW43_ARCH_POLL
+    cyw43_arch_wait_for_work_until(make_timeout_time_ms(LOOP_TEST_WAIT_MS));
+#else
+    busy_wait_ms(LOOP_TEST_WAIT_MS);
+#endif
+#endif
   }
 
   // 10. Send RESET computer command
