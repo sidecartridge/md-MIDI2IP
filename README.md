@@ -242,3 +242,17 @@ deployment.
 ## 📄 License
 
 The source code of the project is licensed under the GNU General Public License v3.0. The full license is accessible in the [LICENSE](LICENSE) file.
+
+## Docker deployment
+
+A single Docker image runs the orchestrator (all ports) and serves the
+[midi-maze-js](https://github.com/diegoparrilla/midi-maze-js) web app on port 80,
+so any server can host MIDI Maze over IP for browsers and hardware nodes alike.
+See [`docker/README.md`](docker/README.md). Quick start:
+
+```sh
+git submodule update --init
+docker build -f docker/Dockerfile -t md-midi2ip .
+docker run -d -p 80:80 -p 5005:5005 -p 5006:5006 -p 8080:8080 \
+  -v midi2ip-data:/data md-midi2ip
+```

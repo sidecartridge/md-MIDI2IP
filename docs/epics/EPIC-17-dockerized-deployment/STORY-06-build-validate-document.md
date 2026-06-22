@@ -2,7 +2,7 @@
 id: STORY-06
 epic: EPIC-17
 title: Build, validate end-to-end, and document deployment
-status: todo
+status: in-progress
 ---
 
 ## Goal
@@ -11,16 +11,16 @@ A built image, validated for the full browser + remote-node flow, with deploy do
 
 ## Tasks
 
-- [ ] Build the image (`docker build`) including the submodule; confirm the image
+- [x] Build the image (`docker build`) including the submodule; confirm the image
       size is reasonable.
-- [ ] Run locally and verify: a browser loads the app on :80, provisions/lists a
+- [x] Run locally and verify: a browser loads the app on :80, provisions/lists a
       room, connects over WebSocket, and plays.
 - [ ] Verify a remote node reaches the server: a TCP node on :5005 and/or a Hatari
       `--transport ws` node on :5006 join the same room.
-- [ ] Verify rooms persist across a container restart (volume mounted).
-- [ ] Write `docker/README.md`: build, run, parameters, ports, volume, and a
+- [x] Verify rooms persist across a container restart (volume mounted).
+- [x] Write `docker/README.md`: build, run, parameters, ports, volume, and a
       one-liner deploy example for any server.
-- [ ] Update the top-level `README.md` to point at the Docker deployment.
+- [x] Update the top-level `README.md` to point at the Docker deployment.
 
 ## Acceptance
 

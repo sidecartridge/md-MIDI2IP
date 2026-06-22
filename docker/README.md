@@ -52,4 +52,40 @@ Every orchestrator parameter is set via an env var — see `.env.example`
 ## Status
 
 - [x] midi-maze-js submodule + Vite build wired into the image.
-- [ ] Build + validate end to end (STORY-06).
+- [x] Built and validated locally: app served on :80, orchestrator REST/WS + CORS,
+      admin room provisioning, and room persistence across a container recreate.
+- [ ] Real remote-node check (ST/Pico on :5005, Hatari `--transport ws` on :5006)
+      — hardware validation.
+
+## Provisioning rooms (admin)
+
+Room writes require `ADMIN_KEY` (empty refuses writes). With it set:
+
+```sh
+# create / list / delete rooms over the REST API (host = the server)
+curl -X POST  -H "X-Admin-Key: $ADMIN_KEY" -d '{"room":"ALPHA"}' http://<host>:8080/rooms
+curl          http://<host>:8080/rooms
+curl -X DELETE -H "X-Admin-Key: $ADMIN_KEY" http://<host>:8080/rooms/ALPHA
+```
+
+Provisioned rooms are written to `ROOMS_FILE` on the `/data` volume and reloaded on
+restart.
+
+## docker-compose (optional)
+
+The deliverable is the single image, but compose is handy for a fixed deployment:
+
+```yaml
+services:
+  midi2ip:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: md-midi2ip
+    ports: ["80:80", "5005:5005", "5006:5006", "8080:8080"]
+    volumes: ["midi2ip-data:/data"]
+    env_file: [docker/.env.example]
+    restart: unless-stopped
+volumes:
+  midi2ip-data:
+```

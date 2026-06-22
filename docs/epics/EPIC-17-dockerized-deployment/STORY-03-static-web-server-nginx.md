@@ -2,7 +2,7 @@
 id: STORY-03
 epic: EPIC-17
 title: Static web server (nginx) for midi-maze-js on :80 + runtime endpoint config
-status: in-progress
+status: done
 ---
 
 ## Goal

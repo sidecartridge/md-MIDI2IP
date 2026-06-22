@@ -2,7 +2,7 @@
 id: STORY-05
 epic: EPIC-17
 title: Rooms persistence + configuration surface
-status: todo
+status: done
 ---
 
 ## Goal
@@ -12,11 +12,11 @@ documented and easy to set.
 
 ## Tasks
 
-- [ ] Point `--rooms-file` at a path on a declared `VOLUME` so the rooms JSON
+- [x] Point `--rooms-file` at a path on a declared `VOLUME` so the rooms JSON
       persists across `docker run` / restarts.
-- [ ] Document the admin-key flow for provisioning rooms over the REST API.
-- [ ] Provide a `.env.example` (or documented env vars) for every parameter.
-- [ ] Provide a `docker run` example (and an optional compose snippet for
+- [x] Document the admin-key flow for provisioning rooms over the REST API.
+- [x] Provide a `.env.example` (or documented env vars) for every parameter.
+- [x] Provide a `docker run` example (and an optional compose snippet for
       convenience, even though the deliverable is the single image).
 
 ## Acceptance

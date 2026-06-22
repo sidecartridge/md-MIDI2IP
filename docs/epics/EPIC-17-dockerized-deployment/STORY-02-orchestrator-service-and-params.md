@@ -2,7 +2,7 @@
 id: STORY-02
 epic: EPIC-17
 title: Orchestrator service layer + parameter passing
-status: in-progress
+status: done
 ---
 
 ## Goal

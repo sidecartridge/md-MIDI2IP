@@ -2,7 +2,7 @@
 id: STORY-04
 epic: EPIC-17
 title: Single-image process supervision + ports + logging
-status: in-progress
+status: done
 ---
 
 ## Goal
@@ -16,7 +16,7 @@ shutdown.
       processes (restart on crash).
 - [x] `EXPOSE 80 5005 5006 8080`; document the published ports.
 - [x] Aggregate both services' logs to the container stdout/stderr.
-- [ ] Handle SIGTERM so `docker stop` shuts both down cleanly.
+- [x] Handle SIGTERM so `docker stop` shuts both down cleanly.
 - [x] Optional: a `HEALTHCHECK` hitting the HTTP status port.
 
 ## Acceptance
