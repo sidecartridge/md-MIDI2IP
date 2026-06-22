@@ -397,6 +397,20 @@ def main() -> int:
         check("GET /rooms lists the new room",
               code == 200 and any(r["room"] == "ALPHA"
                                   for r in json.loads(body)["rooms"]))
+        # The browser fetches /rooms cross-origin, so it must carry a CORS header.
+        with urllib.request.urlopen(
+                f"http://{HOST}:8085/rooms", timeout=2) as cors_resp:
+            check("GET /rooms sends Access-Control-Allow-Origin (browser CORS)",
+                  cors_resp.getheader("Access-Control-Allow-Origin") == "*")
+        # The browser only knows the ws:// URL, so the WS port must also serve /rooms
+        # over plain HTTP (non-upgrade fallthrough) with the same CORS header.
+        with urllib.request.urlopen(
+                f"http://{HOST}:5084/rooms", timeout=2) as ws_http:
+            ws_body = ws_http.read()
+            check("WS port serves /rooms over HTTP with CORS (browser path)",
+                  ws_http.status == 200
+                  and ws_http.getheader("Access-Control-Allow-Origin") == "*"
+                  and any(r["room"] == "ALPHA" for r in json.loads(ws_body)["rooms"]))
         a, oka = ws_connect(5084, room="ALPHA")
         check("join a provisioned room succeeds", oka)
         g, okg = ws_connect(5084, room="GHOST")

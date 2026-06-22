@@ -653,8 +653,22 @@ async def handle_ws(
         headers = ws.parse_headers(bytes(raw_headers))
         key = headers.get("sec-websocket-key", "")
         if not key or not ws.is_upgrade(headers):
-            writer.write(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
-            await writer.drain()
+            # Not a WebSocket upgrade: serve the read-only HTTP routes (status / rooms REST)
+            # on the WS port too. A browser only knows the `ws://host:port` URL it connects
+            # with, so this lets it GET /rooms on that same origin (where the CORS header in
+            # _http_send applies) instead of needing the separate --http-port. (EPIC-14)
+            method = parts[0].upper() if parts else "GET"
+            body = b""
+            try:
+                clen = int(headers.get("content-length", "0") or "0")
+            except ValueError:
+                clen = 0
+            if 0 < clen <= 65536:
+                try:
+                    body = await reader.readexactly(clen)
+                except asyncio.IncompleteReadError as exc:
+                    body = exc.partial
+            await _route_http(writer, method, request_path, headers, body)
             writer.close()
             return
         # Room key (D-14): Authorization: Bearer <roomkey> from the firmware/gateway,
@@ -945,6 +959,10 @@ async def _http_send(writer: asyncio.StreamWriter, status: str, body: bytes = b"
         (
             f"HTTP/1.1 {status}\r\n"
             f"Content-Type: {ctype}\r\n"
+            # Open read-only endpoints (/rooms, /status.json) are fetched by the browser
+            # client from another origin; allow it. Writes (POST/DELETE) still require the
+            # admin key, and `*` does not permit credentialed cross-origin requests.
+            "Access-Control-Allow-Origin: *\r\n"
             f"Content-Length: {len(body)}\r\n"
             "Connection: close\r\n\r\n"
         ).encode("latin-1")
