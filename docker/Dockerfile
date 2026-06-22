@@ -5,32 +5,28 @@
 # Build from the REPO ROOT so the context sees orchestrator/ and the submodule:
 #   docker build -f docker/Dockerfile -t md-midi2ip .
 
-# ---- midi-maze-js build stage (STORY-03) --------------------------------------
-# Enable once the midi-maze-js submodule + its build system are wired in.
-# If the app needs a build:
-#   FROM node:20-slim AS web
-#   WORKDIR /web
-#   COPY midi-maze-js/ ./
-#   RUN npm ci && npm run build            # produces /web/dist
-# If it ships prebuilt static files, skip this stage and COPY them in the runtime
-# stage instead.
+# ---- midi-maze-js build stage (Vite + TypeScript) -----------------------------
+FROM node:20-slim AS web
+WORKDIR /web
+COPY midi-maze-js/ ./
+RUN npm ci && npm run build          # tsc --noEmit && vite build -> /web/dist
 
 # ---- runtime: orchestrator (Python stdlib) + nginx + supervisor ---------------
 FROM python:3.12-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends nginx supervisor curl \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -sf /dev/stdout /var/log/nginx/access.log \
+ && ln -sf /dev/stderr /var/log/nginx/error.log
 
 # Orchestrator — stdlib only, no pip deps (D-10).
 COPY orchestrator/ /app/orchestrator/
 
-# Static web app served by nginx on :80.
-# TODO(STORY-03): replace the placeholder with the built midi-maze-js once the
-# submodule lands, e.g.:
-#   COPY --from=web /web/dist/ /usr/share/nginx/html/
-#   # or, if prebuilt:  COPY midi-maze-js/ /usr/share/nginx/html/
-COPY docker/web-placeholder/ /usr/share/nginx/html/
+# Static web app (built midi-maze-js) served by nginx on :80. The app derives the
+# orchestrator endpoint at runtime from the browser host: ws://<host>:5006 (+ /rooms
+# on the same host:port), so no per-deploy rebuild or proxy is needed (D-16).
+COPY --from=web /web/dist/ /usr/share/nginx/html/
 
 # nginx + supervisor + launch scripts
 COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf

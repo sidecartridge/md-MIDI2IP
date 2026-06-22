@@ -2,7 +2,7 @@
 id: STORY-03
 epic: EPIC-17
 title: Static web server (nginx) for midi-maze-js on :80 + runtime endpoint config
-status: todo
+status: in-progress
 ---
 
 ## Goal
@@ -12,14 +12,14 @@ on this host without a rebuild per deployment.
 
 ## Tasks
 
-- [ ] Serve the midi-maze-js dist on :80 with nginx (multi-stage `npm build` if the
+- [x] Serve the midi-maze-js dist on :80 with nginx (multi-stage `npm build` if the
       app needs building, else copy static files).
-- [ ] Resolve the orchestrator endpoint at runtime: prefer deriving the host from
+- [x] Resolve the orchestrator endpoint at runtime: prefer deriving the host from
       `window.location.hostname` + the fixed WS/REST ports (5006 / 8080), or
       generate a `config.js` from env at container start. Document the mechanism.
-- [ ] Confirm the app can GET `/rooms` (CORS) and open the WebSocket to the same
+- [x] Confirm the app can GET `/rooms` (CORS) and open the WebSocket to the same
       host (EPIC-14 — the WS port also serves `/rooms`).
-- [ ] nginx access/error logs to stdout/stderr.
+- [x] nginx access/error logs to stdout/stderr.
 
 ## Acceptance
 
