@@ -106,8 +106,9 @@ Provisioning (REST, on the HTTP status port):
 Routing:
 
 - One ring per room. The relay forwards OUT(N) to IN(N+1) within a room only (D-04); a room
-  of one echoes to itself. Dedup and reconnection recycling stay within the room, and
-  telemetry is room-scoped.
+  of one echoes to itself. A connection is identified by its full remote endpoint
+  (`ip:port`), so many players can share one IP; a half-open connection from an ungraceful
+  drop is reaped by TCP keepalive. Telemetry is room-scoped.
 
 Lifecycle:
 

@@ -14,11 +14,11 @@ Scope so far:
     forms (D-04).
   - STORY-03: a read-only **HTTP status** interface on a separate port (HTML page
     + `/status.json`), served in the same asyncio loop (race-free registry reads).
-  - STORY-04: **robustness** — TCP keepalive (dead-player detection), bounded
-    write buffers, slow-player drop (a stuck node can't freeze the ring),
-    one-connection-per-**private**-IP (a reconnect supersedes a node's stale
-    half-open connection; public/NAT gateways and loopback are exempt),
-    defensive per-connection error handling, and clean Ctrl-C shutdown.
+  - STORY-04: **robustness** — TCP keepalive (reaps a half-open connection left by
+    an ungraceful drop, per-connection — connections are identified by their full
+    remote endpoint ip:port, so many players can share one IP), bounded write
+    buffers, slow-player drop (a stuck node can't freeze the ring), defensive
+    per-connection error handling, and clean Ctrl-C shutdown.
 
 EPIC-13 STORY-03: an optional **WebSocket** listener (--ws / --ws-port) that
   shares the same ring. TCP and WebSocket players relay to each other through a
@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import ipaddress
 import json
 import logging
 import os
@@ -146,28 +145,10 @@ class MidiMazeInspector:
         return [f"JOYSTICK({_mm_joystick(b)})"] if self._in_game else [f"byte(0x{b:02x})"]
 
 
-def _should_dedup_ip(ip: str) -> bool:
-    """Whether one-connection-per-IP applies to this peer.
-
-    Only **private-network** addresses (RFC 1918 / link-local) — a LAN node = one
-    IP, so a reconnect must supersede its stale connection. NOT public addresses
-    (a NAT gateway legitimately hides many players behind one IP) and NOT loopback
-    (so local multi-client testing / two emulators on one host can coexist)."""
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
-        return False
-    return addr.is_private and not addr.is_loopback
-
 # A player whose IN can't be written for this long (TCP backpressure) is treated
 # as stuck and dropped, so one slow node can't freeze the lock-step ring.
 SLOW_PLAYER_TIMEOUT_S = 5.0
 WRITE_BUFFER_HIGH = 64 * 1024  # bound per-connection write buffer (bytes)
-# A prior connection from a reconnecting IP that has relayed nothing for this long
-# is treated as a stalled/dead node (it never FIN'd) and superseded by the
-# reconnection — even for IP classes exempt from the strict one-per-IP dedup
-# (loopback/NAT). The reconnection always gets a fresh, incremented node id.
-RECONNECT_STALE_S = 10.0
 # Reverse-DNS (PTR) of a connected node's IP — best-effort, off the relay path,
 # bounded by this timeout so a slow/missing resolver never stalls a connection.
 DNS_TIMEOUT_S = 1.0
@@ -192,16 +173,23 @@ def _normalize_room(key: "str | None") -> str:
 
 
 def _enable_keepalive(sock: socket.socket) -> None:
-    """Detect a silently-dead player (no FIN) in ~10s instead of TCP's default.
-    Same approach as tools/echo_peer.py."""
+    """Detect a silently-dead player (an ungraceful drop with no FIN, e.g. a power
+    cycle or a yanked cable) in ~10s instead of TCP's hours-long default. This is
+    the *only* dead-connection reaper: connections are identified by their full
+    remote endpoint (ip:port), never by IP alone, so a half-open phantom is reaped
+    per-connection here and never by superseding another connection that merely
+    shares its IP (a NAT/loopback/LAN host can carry many distinct players)."""
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        if hasattr(socket, "TCP_KEEPIDLE"):  # Linux
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 5)
+        # Idle before the first probe: TCP_KEEPIDLE on Linux, TCP_KEEPALIVE on macOS/BSD.
+        idle = getattr(socket, "TCP_KEEPIDLE", None) or getattr(socket, "TCP_KEEPALIVE", None)
+        if idle is not None:
+            sock.setsockopt(socket.IPPROTO_TCP, idle, 4)
+        # Probe interval + count (set where the platform exposes them — Linux + macOS do).
+        if hasattr(socket, "TCP_KEEPINTVL"):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 2)
+        if hasattr(socket, "TCP_KEEPCNT"):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
-        elif hasattr(socket, "TCP_KEEPALIVE"):  # macOS
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, 5)
     except OSError:
         pass  # unsupported — non-fatal
 
@@ -308,7 +296,7 @@ class Player:
 
     id: int
     peer: str  # "ip:port"
-    ip: str  # peer host only — node identity for one-connection-per-IP dedup
+    ip: str  # peer host only (for telemetry/reverse-DNS); identity is the full peer ip:port
     conn: "Conn"  # transport-agnostic carrier (EPIC-13); push this player's IN via conn.send
     connected_at: float  # event-loop clock (seconds); for uptime
     bytes_out: int = 0  # bytes received FROM the player (their MIDI OUT)
@@ -504,12 +492,6 @@ def _drop_player(player: Player, reason: str) -> None:
         pass
 
 
-def _is_stalled(player: Player, now: float) -> bool:
-    """A connected player that has relayed no OUT bytes for RECONNECT_STALE_S — a
-    likely dead/half-open node. Used to supersede it when its IP reconnects."""
-    return (now - player.last_active) > RECONNECT_STALE_S
-
-
 async def _resolve_host(player: Player) -> None:
     """Best-effort reverse-DNS (PTR) of the player's IP into player.host. Runs off
     the relay path and is bounded by DNS_TIMEOUT_S, so a slow or missing resolver
@@ -540,30 +522,24 @@ async def handle_conn(conn: "Conn", room_key: str = DEFAULT_ROOM) -> None:
     (STORY-04): keepalive, bounded write buffer, slow-player drop, defensive error
     handling. The body is identical for a TCP or a WebSocket carrier (D-13).
 
-    EPIC-14: the player joins `room_key`'s ring; the relay, dedup, and telemetry are
-    scoped to that room. TCP and keyless nodes use the default room."""
+    EPIC-14: the player joins `room_key`'s ring; the relay and telemetry are scoped
+    to that room. TCP and keyless nodes use the default room.
+
+    Connection identity is the full remote endpoint (ip:port), so two distinct
+    connections from one host — two players behind a NAT, two emulators on a box,
+    a real ST and a test client on one LAN IP — are always separate players. A
+    half-open phantom left by an ungraceful drop is reaped per-connection by TCP
+    keepalive (_enable_keepalive), never by superseding another connection that
+    merely shares its IP."""
     conn.tune()
     peer = conn.peer
     ip = conn.ip
     reg = rooms.get(room_key)  # this room's ring (auto-created for now, STORY-02)
-
-    # Supersede a prior connection from this IP on (re)connect (EPIC-11 STORY-02),
-    # within this room. A private LAN address is always one-per-IP (a LAN node = one
-    # IP). For ANY IP class (incl. loopback / NAT, which are exempt from the strict
-    # dedup), a *stalled* prior connection is a dead node that never FIN'd; drop it so
-    # the reconnection doesn't leave a phantom. The reconnection gets a fresh id.
     now = asyncio.get_event_loop().time()
-    for existing in reg.players():
-        if existing.ip != ip:
-            continue
-        if _should_dedup_ip(ip):
-            _drop_player(existing, f"superseded (LAN one-per-IP) by reconnection from {ip}")
-        elif _is_stalled(existing, now):
-            _drop_player(existing, f"superseded (prior connection stalled) by reconnection from {ip}")
 
     # Capacity (D-04): the ring caps at MAX_PLAYERS_PER_ROOM. handle_ws refuses an
     # over-cap WS join with 403 before the handshake; this is the definitive check
-    # (covers TCP and any race after the dedup above freed/used a slot).
+    # (covers TCP and any handshake/relay race).
     if len(reg) >= MAX_PLAYERS_PER_ROOM:
         LOG.warning("room '%s' full (%d); refusing %s", room_key, len(reg), peer)
         conn.close()

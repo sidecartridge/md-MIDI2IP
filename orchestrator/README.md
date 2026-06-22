@@ -69,10 +69,12 @@ room key, game `phase`, `master` node id, and per node in ring order: `id`, `ip`
 reverse-DNS `host`, `peer`, `transport` (`tcp` / `ws`), `connected_s`, `idle_s`,
 `bytes_out` (bytes received from the node), `bytes_in` (bytes sent to it). The phase and
 master come from the read-only `--inspect` decoder running per room, off the relay path.
-The server enforces one connection per private IP within a room. A reconnect from the same
-IP supersedes the prior connection when that connection is a private-LAN node or has
-stalled, and the reconnection takes a fresh node id. TCP keepalive plus a slow-player drop
-keep one stuck node from freezing the ring.
+Each connection is a separate player, identified by its full remote endpoint (`ip:port`),
+so many players can share one IP — two players behind a home NAT, two emulators on one box,
+or local testing all coexist. A node that drops without a clean close leaves a half-open
+connection; TCP keepalive reaps it per-connection in about ten seconds (a reconnect comes in
+as a new connection and a fresh node id). A slow-player drop keeps one stuck node from
+freezing the ring.
 
 On a disconnect, the orchestrator holds nothing to replay: it relays directly (no per-player
 byte queue), the per-connection write buffer is bounded and discarded when the socket

@@ -4,9 +4,9 @@
 Spawns orchestrator.py on test ports and validates it end to end:
   Phase A (ring): two clients form a 2-ring; A<->B byte-exact; HTTP /status.json
     reflects players + ring; a drop re-forms the ring and a reconnect rejoins.
-    (Both clients are on loopback, which is exempt from the per-IP dedup.)
-  Phase B (dedup classification): one-connection-per-IP applies to private LAN
-    addresses only — not public (NAT may hide many) or loopback (local testing).
+  Phase B (connection identity): many connections from one IP are distinct players
+    (identity is the full peer ip:port, not the IP) — an idle peer is not dropped
+    when another connection from the same IP joins.
   Phase C (--inspect decoder): the read-only MidiMazeInspector decodes a protocol
     byte stream into event labels (the only protocol awareness left after the
     relay went back to dumb — EPIC-11 STORY-01).
@@ -174,7 +174,8 @@ def ws_recv(s: socket.socket, dec: "ws.FrameDecoder", n: int, timeout: float = 2
 
 def main() -> int:
     # Phase A — ring relay + status + drop/reconnect. Both clients are on
-    # 127.0.0.1 (loopback is exempt from the per-IP dedup, so they coexist).
+    # 127.0.0.1; many connections from one IP are distinct players (identity is
+    # the full peer ip:port, exercised directly in Phase B).
     with server(5099, 8099):
         print("ring relay (2 players):")
         a, b = conn(5099), conn(5099)
@@ -213,32 +214,36 @@ def main() -> int:
         b.close()
         c.close()
 
-    # Phase B — the per-IP dedup classification: a reconnect supersedes a node
-    # only on a *private* network IP (a LAN node = one IP), never public (a NAT
-    # gateway may hide many players) or loopback (local testing). Unit-tested
-    # directly, since the test host only has loopback to connect from.
-    print("one-connection-per-private-IP classification:")
-    import orchestrator as orch  # same directory
+    # Phase B — connection identity is the full peer (ip:port), not the IP. Many
+    # connections from one host (two players behind a NAT, two clients on a box,
+    # local testing) are distinct players, and an idle peer is NOT superseded when
+    # another connection from the same IP joins. All clients here share 127.0.0.1,
+    # so each differing only in remote port is the exact case under test.
+    with server(5097, 8097):
+        print("connection identity (full peer ip:port):")
+        a, b, c = conn(5097), conn(5097), conn(5097)
+        time.sleep(0.3)
+        st = status(8097)
+        check("three connections from one IP are three players",
+              st["players_online"] == 3)
+        peers = [p["peer"] for p in st["players"]]
+        check("each player has a distinct ip:port peer",
+              len(set(peers)) == 3 and all(p.startswith("127.0.0.1:") for p in peers))
 
-    check("192.168/16 (LAN) -> dedup", orch._should_dedup_ip("192.168.1.50") is True)
-    check("10/8 (LAN) -> dedup", orch._should_dedup_ip("10.0.0.5") is True)
-    check("172.16/12 (LAN) -> dedup", orch._should_dedup_ip("172.16.4.9") is True)
-    check("public -> no dedup (NAT may hide many)", orch._should_dedup_ip("8.8.8.8") is False)
-    check("loopback -> no dedup (local testing)", orch._should_dedup_ip("127.0.0.1") is False)
-    check("invalid -> no dedup", orch._should_dedup_ip("not-an-ip") is False)
-
-    # Reconnection supersede (EPIC-11 STORY-02): a prior same-IP connection that
-    # has gone quiet past RECONNECT_STALE_S is stalled, so a reconnection drops it
-    # and the new connection takes a fresh, incremented node id.
-    p = orch.Player(id=9, peer="x:1", ip="x", conn=None, connected_at=0.0, last_active=100.0)
-    check("fresh node not stalled", orch._is_stalled(p, 105.0) is False)
-    check("quiet node stalled past threshold",
-          orch._is_stalled(p, 100.0 + orch.RECONNECT_STALE_S + 1) is True)
+        # An idle peer must not be dropped when a new connection from the same IP
+        # joins (the old IP-supersede bug killed it). a + b stay quiet; d joins.
+        d = conn(5097)
+        time.sleep(0.3)
+        check("idle same-IP peers survive a new connection (4 online)",
+              status(8097)["players_online"] == 4)
+        for s in (a, b, c, d):
+            s.close()
 
     # Phase C — the --inspect protocol decoder (the only protocol awareness left
     # after EPIC-11 STORY-01 returned the relay to dumb). Read-only, off the relay
     # path — it decodes a player's OUT stream into event labels for the log.
     print("--inspect protocol decoder:")
+    import orchestrator as orch  # same directory
     insp = orch.MidiMazeInspector()
     check("0x80 -> COUNT-PLAYERS-start", insp.feed(b"\x80") == ["COUNT-PLAYERS-start"])
     check("count byte -> COUNT-PLAYERS(n=2)", insp.feed(b"\x02") == ["COUNT-PLAYERS(n=2)"])
@@ -547,7 +552,7 @@ def main() -> int:
     if _failures:
         print(f"FAIL — {len(_failures)} check(s): {', '.join(_failures)}")
         return 1
-    print("PASS: orchestrator relay + IP-dedup + --inspect + ws codec + mixed ring + rooms + REST")
+    print("PASS: orchestrator relay + conn-identity + --inspect + ws codec + mixed ring + rooms + REST")
     return 0
 
 
