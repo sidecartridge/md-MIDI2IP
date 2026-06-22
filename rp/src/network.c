@@ -15,6 +15,10 @@ static char connectionStatusStr[NETWORK_MAX_STRING_LENGTH] = {0};
 // Re-applied on every link-up because a pre-association cyw43_wifi_pm() does
 // not survive the join. Defaults to PM disabled until network_wifiInit() runs.
 static uint32_t staPmValue = NETWORK_POWER_MGMT_DISABLED;
+// Set by the link-up callback; the actual cyw43_wifi_pm() ioctl is deferred to
+// network_safePoll() (main-loop context). Calling it from the netif callback
+// would re-enter the driver from inside cyw43_arch_poll() and silently no-op.
+static volatile bool staReapplyPm = false;
 #if LWIP_MDNS_RESPONDER
 // mDNS lifecycle flags. The lwIP mDNS responder must be initialized at
 // most once per boot, and a netif may have at most one service entry
@@ -503,6 +507,13 @@ int network_wifiInit(wifi_mode_t mode) {
 void network_safePoll() {
   if (cyw43Initialized) {
     cyw43_arch_poll();
+    // Apply a pending power-management change here, after cyw43_arch_poll() has
+    // returned, so the ioctl runs outside the driver's poll (EPIC-16, D-15).
+    if (staReapplyPm) {
+      staReapplyPm = false;
+      DPRINTF("Applying Wi-Fi PM (post-assoc): %08x\n", staPmValue);
+      cyw43_wifi_pm(&cyw43_state, staPmValue);
+    }
   }
 }
 
@@ -612,13 +623,13 @@ static void wifiLinkCallback(struct netif *netif) {
   bool up = netif_is_link_up(netif);
   DPRINTF("WiFi Link: %s\n", (up ? "UP" : "DOWN"));
   if (up) {
-    // EPIC-16: (re)apply power management now that the STA has associated.
-    // Setting it in network_wifiInit() before the join does not stick — the
-    // chip falls back to its default PM2 power-save, which made idle ICMP RTT
-    // swing 5-660 ms (low only under continuous traffic). Re-applying here also
-    // covers reconnects.
-    DPRINTF("Re-applying Wi-Fi PM after link-up: %08x\n", staPmValue);
-    cyw43_wifi_pm(&cyw43_state, staPmValue);
+    // EPIC-16: request a power-management re-apply now that the STA has
+    // associated. Setting PM in network_wifiInit() before the join does not
+    // stick (the chip falls back to its default PM2 power-save). We only flag it
+    // here and apply it from network_safePoll() in the main loop, because this
+    // callback runs inside cyw43_arch_poll() and a cyw43_wifi_pm() ioctl from
+    // here would re-enter the driver and silently no-op. Also covers reconnects.
+    staReapplyPm = true;
   } else {
     // Drop currentIp / status / status string so callers don't keep
     // serving stale values after a link drop.

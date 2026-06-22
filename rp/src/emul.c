@@ -668,11 +668,13 @@ void emul_start() {
       if (instrMidi > instrMaxMidiUs) instrMaxMidiUs = instrMidi;
       if (instrTerm > instrMaxTermUs) instrMaxTermUs = instrTerm;
       if (absolute_time_diff_us(get_absolute_time(), instrNextReport) <= 0) {
+        int32_t instrRssi = 0;
+        if (!network_getCurrentRssi(&instrRssi)) instrRssi = 0;
         DPRINTF(
             "net-instr[%dms]: worst gap=%lld us | cyw43=%lld midi=%lld "
-            "term=%lld us\n",
+            "term=%lld us | rssi=%ld dBm\n",
             NET_INSTR_REPORT_MS, instrMaxGapUs, instrMaxCyw43Us, instrMaxMidiUs,
-            instrMaxTermUs);
+            instrMaxTermUs, (long)instrRssi);
         instrMaxGapUs = 0;
         instrMaxCyw43Us = 0;
         instrMaxMidiUs = 0;
