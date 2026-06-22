@@ -223,6 +223,10 @@ add_definitions(-DDISPLAY_ATARIST)
 # We don't modify the flash in Core 1
 add_definitions(-DPICO_FLASH_ASSUME_CORE0_SAFE=1)
 
+# Grant the DMA high bus priority over the CPU (romemul.c) — the cartridge bus
+# emulation saturates the bus, so DMA must not be starved by the cores.
+add_definitions(-DPRIORITY_DMA=1)
+
 
 # Remove unused data
 target_link_options(${PROJECT_NAME} PRIVATE
