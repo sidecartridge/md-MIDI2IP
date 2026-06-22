@@ -13,6 +13,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 4 | Optional WebSocket transport (TCP or WebSocket) | done |
 | 5 | Private rooms (room-key MIDI rings) | done |
 | 6 | Robustness pass: buffer cleanup on disconnect | done |
+| 7 | Network reliability & latency pass | in-progress |
 
 ---
 
@@ -186,3 +187,37 @@ cross-session state. Validated on real hardware: a reconnect mid-config and mid-
 poison the ring. The master-takeover case was confirmed to be expected MIDI Maze behavior
 (a master does not recirculate an election byte) and was dropped from scope. **Iteration
 complete.**
+
+---
+
+## Iteration 7: Network reliability & latency pass
+
+**Goal:** the link to the orchestrator is unreliable. An ICMP round-trip to the Pico W
+swings from ~5 ms to ~660 ms with periodic request timeouts — jitter that points at the
+firmware not servicing the network stack on a steady cadence rather than a bad Wi-Fi link.
+Diagnose the dominant cause on the RP2040 path and make the network answer with low,
+consistent latency so MIDI Maze plays without drops. Leading suspects (confirmed by
+measurement before any fix): Wi-Fi power-save left on by a stale config, and
+`cyw43_arch_poll()` starvation when the Core-0 hot loop blocks inside its 1 ms poll
+window (display render, flash write, reconnect/DNS). lwIP buffer pressure is a secondary
+candidate.
+
+**Epics**
+
+| Epic | Status | Note |
+| --- | --- | --- |
+| EPIC-16 · Network reliability & latency pass | in-progress | instrument poll-gap + ping to identify the dominant cause, then fix and validate on hardware |
+
+**Outcome:** the cause was Wi-Fi power-save, not the firmware loop. On-device poll-gap
+instrumentation (STORY-01) proved the Core-0 loop healthy (worst gap ~5.3 ms while idle RTT
+hit 100-900 ms), ruling out poll starvation, and RSSI of -41 dBm ruled out RF. The radio was
+sleeping between beacons because the unit's `WIFI_POWER` config selected a power-save mode
+(`CYW43_PERFORMANCE_PM`, applied PM word `0xa11142`). Two firmware bugs were fixed along the
+way: power management was applied before association (so it never stuck — now re-applied
+post-association from main-loop context, since a `cyw43_wifi_pm()` ioctl from the netif
+callback re-enters the driver and no-ops), and the "disabled" constant was `0xa11140`
+(`PERFORMANCE_PM` with the mode nibble zeroed, still carrying a ~1 s listen interval) rather
+than the real `CYW43_NONE_PM` (`0x10`). Since power-save is incompatible with the lock-step
+ring (C-01), the firmware now **forces PM off unconditionally and ignores `WIFI_POWER`**
+(D-15). Validated on hardware: idle RTT is flat at single-digit ms. _Pending: a full-match
+regression check and merge to `main`._

@@ -11,6 +11,14 @@ static uint8_t cyw43Mac[NETWORK_MAC_SIZE];
 static char cyw43MacStr[NETWORK_MAX_STRING_LENGTH];
 static wifi_sta_conn_status_t connectionStatus = DISCONNECTED;
 static char connectionStatusStr[NETWORK_MAX_STRING_LENGTH] = {0};
+// EPIC-16: the resolved Wi-Fi power-management word (from PARAM_WIFI_POWER).
+// Re-applied on every link-up because a pre-association cyw43_wifi_pm() does
+// not survive the join. Defaults to PM disabled until network_wifiInit() runs.
+static uint32_t staPmValue = NETWORK_POWER_MGMT_DISABLED;
+// Set by the link-up callback; the actual cyw43_wifi_pm() ioctl is deferred to
+// network_safePoll() (main-loop context). Calling it from the netif callback
+// would re-enter the driver from inside cyw43_arch_poll() and silently no-op.
+static volatile bool staReapplyPm = false;
 #if LWIP_MDNS_RESPONDER
 // mDNS lifecycle flags. The lwIP mDNS responder must be initialized at
 // most once per boot, and a netif may have at most one service entry
@@ -454,34 +462,15 @@ int network_wifiInit(wifi_mode_t mode) {
     wifiCurrentMode = WIFI_MODE_AP;
   }
 
-  // Setting the power management
-  uint32_t pmValue = NETWORK_POWER_MGMT_DISABLED;  // 0: Disable PM
-  SettingsConfigEntry *pmEntry =
-      settings_find_entry(gconfig_getContext(), PARAM_WIFI_POWER);
-  if (pmEntry != NULL) {
-    pmValue = strtoul(pmEntry->value, NULL, HEX_BASE);
-  }
-  if (pmValue < NETWORK_POWER_MGMT_MAX_OPTIONS) {
-    switch (pmValue) {
-      case 0:
-        pmValue = NETWORK_POWER_MGMT_DISABLED;  // DISABLED_PM
-        break;
-      case 1:
-        pmValue = CYW43_PERFORMANCE_PM;  // PERFORMANCE_PM
-        break;
-      case 2:
-        pmValue = CYW43_AGGRESSIVE_PM;  // AGGRESSIVE_PM
-        break;
-      case 3:
-        pmValue = CYW43_DEFAULT_PM;  // DEFAULT_PM
-        break;
-      default:
-        pmValue = CYW43_NO_POWERSAVE_MODE;  // NO_POWERSAVE_MODE
-        break;
-    }
-  }
-  DPRINTF("Setting power management to: %08x\n", pmValue);
-  cyw43_wifi_pm(&cyw43_state, pmValue);
+  // Wi-Fi power management: always OFF (EPIC-16, D-15). PARAM_WIFI_POWER is
+  // intentionally ignored — any power-save mode lets the radio sleep between
+  // beacons, which made idle ICMP RTT swing 5-660 ms and breaks MIDI Maze's
+  // lock-step ring (C-01). Remember the value so wifiLinkCallback re-applies it
+  // after association (a pre-join cyw43_wifi_pm does not stick).
+  staPmValue = NETWORK_POWER_MGMT_DISABLED;  // CYW43_NONE_PM
+  DPRINTF("Setting power management to: %08x (forced off, WIFI_POWER ignored)\n",
+          staPmValue);
+  cyw43_wifi_pm(&cyw43_state, staPmValue);
   return 0;
 }
 #endif
@@ -497,6 +486,13 @@ int network_wifiInit(wifi_mode_t mode) {
 void network_safePoll() {
   if (cyw43Initialized) {
     cyw43_arch_poll();
+    // Apply a pending power-management change here, after cyw43_arch_poll() has
+    // returned, so the ioctl runs outside the driver's poll (EPIC-16, D-15).
+    if (staReapplyPm) {
+      staReapplyPm = false;
+      DPRINTF("Applying Wi-Fi PM (post-assoc): %08x\n", staPmValue);
+      cyw43_wifi_pm(&cyw43_state, staPmValue);
+    }
   }
 }
 
@@ -603,8 +599,17 @@ int network_scanIsActive() {
 wifi_scan_data_t *network_getFoundNetworks() { return &wifiScanData; }
 
 static void wifiLinkCallback(struct netif *netif) {
-  DPRINTF("WiFi Link: %s\n", (netif_is_link_up(netif) ? "UP" : "DOWN"));
-  if (!netif_is_link_up(netif)) {
+  bool up = netif_is_link_up(netif);
+  DPRINTF("WiFi Link: %s\n", (up ? "UP" : "DOWN"));
+  if (up) {
+    // EPIC-16: request a power-management re-apply now that the STA has
+    // associated. Setting PM in network_wifiInit() before the join does not
+    // stick (the chip falls back to its default PM2 power-save). We only flag it
+    // here and apply it from network_safePoll() in the main loop, because this
+    // callback runs inside cyw43_arch_poll() and a cyw43_wifi_pm() ioctl from
+    // here would re-enter the driver and silently no-op. Also covers reconnects.
+    staReapplyPm = true;
+  } else {
     // Drop currentIp / status / status string so callers don't keep
     // serving stale values after a link drop.
     network_resetConnectionState();
