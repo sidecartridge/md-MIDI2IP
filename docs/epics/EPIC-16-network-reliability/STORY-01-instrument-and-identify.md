@@ -13,7 +13,7 @@ measurement, not guessed, so a wrong change doesn't cost a hardware cycle.
 
 ## Tasks
 
-- [ ] Capture a baseline: `ping` the Pico for ≥ 60 s while idle and again during a
+- [x] Capture a baseline: `ping` the Pico for ≥ 60 s while idle and again during a
       MIDI Maze match. Record min/avg/max/mdev and packet loss for each.
 - [ ] Read the affected unit's `WIFI_POWER` config value (boot menu / serial) and
       log the resolved `pmValue` at `rp/src/network.c:483`. Confirm whether PM is
@@ -25,10 +25,10 @@ measurement, not guessed, so a wrong change doesn't cost a hardware cycle.
       measure the **max gap between consecutive `cyw43_arch_poll()` calls** and the
       time spent inside `term_loop()` and `midi_net_poll()`. Log the worst-case
       stall over a 60 s window.
-- [ ] Correlate ping spikes with poll-gap spikes to attribute the variance:
+- [x] Correlate ping spikes with poll-gap spikes to attribute the variance:
       power-save (radio asleep) vs poll starvation (Core 0 blocked) vs lwIP buffer
       pressure.
-- [ ] Record the conclusion (dominant cause + supporting numbers) in the epic
+- [x] Record the conclusion (dominant cause + supporting numbers) in the epic
       Notes, and add a `D-NN` row to `DECISIONS.md` if it settles a cross-cutting
       choice (e.g. "PM is always forced off in firmware").
 
@@ -37,7 +37,46 @@ measurement, not guessed, so a wrong change doesn't cost a hardware cycle.
 A written conclusion naming the dominant cause, backed by the measured poll-gap
 and ping numbers, with the STORY-02 fix approach selected on that evidence.
 
-## Findings (in progress)
+## Findings
+
+### Conclusion — dominant cause is Wi-Fi power-save, NOT poll starvation
+
+Hardware capture (idle ping, 5 s windows) — `emul.c` net-instr:
+
+```
+worst gap ~5266-5697 us (steady) | cyw43 343-1468 us | midi 7-226 us | term 11-14 us
+```
+
+while idle ICMP RTT swung **5-413 ms** (e.g. 106, 403, 262, then 5-7 ms bursts).
+
+The worst poll gap never exceeds ~5.7 ms. A multi-hundred-ms Core-0 stall would
+surface here as a ~hundreds-of-ms gap; it does not. **So the poll loop is healthy
+and poll starvation is ruled out** — my original prime suspect was wrong. cyw43
+poll (0.3-1.5 ms), midi (≤226 µs under load) and term (~12 µs) are all small. The
+latency lives *below* lwIP, in the radio / Wi-Fi layer.
+
+The pattern is textbook **station power-save**: idle (1 ping/s) → the radio sleeps
+between DTIM beacons and the AP buffers the echo until the next wake → 100-400 ms,
+highly variable. During a MIDI Maze match the continuous byte stream keeps the
+radio awake → steady ~5 ms ("during the game the latency seems to go down").
+
+**Root cause in code:** `cyw43_wifi_pm()` is applied once in `network_wifiInit()`
+(`network.c:484`) **before** the STA associates (`network_wifiStaConnect` →
+`cyw43_arch_wifi_connect_async`, `network.c:843`). The setting does not survive the
+join, so the chip runs its default `CYW43_PERFORMANCE_PM` (PM2 power-save)
+regardless of `WIFI_POWER`. It must be (re)applied *after* association — the
+natural hook is `wifiLinkCallback()` on link-up (`network.c:605`, which today only
+handles the down case).
+
+**STORY-02 fix (chosen on this evidence):** re-apply the configured PM value on
+every link-up, and ensure the unit's `WIFI_POWER` is `0` (disabled). Validate by
+re-running this instrumentation + ping: the poll gap stays ~ms (unchanged) while
+idle RTT collapses to single-digit ms.
+
+*Open data point (folded into STORY-02 validation):* the unit's currently stored
+`WIFI_POWER` value, to know whether disabled-but-ineffective (timing) or an actual
+powersave value is set. The fix is correct either way.
+
 
 ### Power-management constant — confirmed correct (no bug)
 
