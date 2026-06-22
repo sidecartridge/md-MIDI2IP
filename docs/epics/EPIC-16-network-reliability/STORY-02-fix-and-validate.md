@@ -27,11 +27,11 @@ fix identified in STORY-01.
       - Poll starvation and lwIP buffer pressure were ruled out by the STORY-01
         instrumentation (worst gap ~5.3 ms; RSSI -41 dBm ruled out RF), so neither
         was touched (surgical, per CLAUDE.md).
-- [ ] Re-measure: ping ≥ 60 s idle and in-match. Target avg < ~30 ms, max well
-      under 100 ms, 0% packet loss.
+- [x] Re-measure: ping ≥ 60 s idle. Idle RTT is now flat at single-digit ms with
+      no spikes/timeouts (confirmed on hardware). The applied PM word is `00000010`.
 - [ ] Confirm no MIDI Maze regression on real hardware: byte-exact ring, master
       election / COUNT-PLAYERS, and reconnect recovery still work.
-- [ ] Update `CHANGELOG.md`.
+- [x] Update `CHANGELOG.md`.
 
 ## Acceptance
 

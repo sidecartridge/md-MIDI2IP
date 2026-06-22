@@ -208,4 +208,16 @@ candidate.
 | --- | --- | --- |
 | EPIC-16 · Network reliability & latency pass | in-progress | instrument poll-gap + ping to identify the dominant cause, then fix and validate on hardware |
 
-**Outcome:** _in progress._
+**Outcome:** the cause was Wi-Fi power-save, not the firmware loop. On-device poll-gap
+instrumentation (STORY-01) proved the Core-0 loop healthy (worst gap ~5.3 ms while idle RTT
+hit 100-900 ms), ruling out poll starvation, and RSSI of -41 dBm ruled out RF. The radio was
+sleeping between beacons because the unit's `WIFI_POWER` config selected a power-save mode
+(`CYW43_PERFORMANCE_PM`, applied PM word `0xa11142`). Two firmware bugs were fixed along the
+way: power management was applied before association (so it never stuck — now re-applied
+post-association from main-loop context, since a `cyw43_wifi_pm()` ioctl from the netif
+callback re-enters the driver and no-ops), and the "disabled" constant was `0xa11140`
+(`PERFORMANCE_PM` with the mode nibble zeroed, still carrying a ~1 s listen interval) rather
+than the real `CYW43_NONE_PM` (`0x10`). Since power-save is incompatible with the lock-step
+ring (C-01), the firmware now **forces PM off unconditionally and ignores `WIFI_POWER`**
+(D-15). Validated on hardware: idle RTT is flat at single-digit ms. _Pending: a full-match
+regression check and merge to `main`._

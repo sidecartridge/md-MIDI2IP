@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### More reliable Wi-Fi (network latency fix)
+
+- Fixed a major source of network lag: the firmware now keeps the Pico W's Wi-Fi radio
+  always awake. A power-save mode was letting the radio nap between beacons, so whenever the
+  game wasn't flooding the link the round-trip time swung wildly — from a few milliseconds up
+  to nearly a second, with occasional dropouts — enough to stall MIDI Maze's lock-step ring
+  and time out a match start. Power management is now forced off (the old `WIFI_POWER` option
+  is ignored), so latency stays flat.
+
 ## v1.0.0beta (2026-06-18)
 
 MIDI-to-IP turns a real Atari ST (through the SidecarTridge Multi-device) or the Hatari

@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-16
 title: Instrument and identify the dominant latency source
-status: in-progress
+status: done
 ---
 
 ## Goal
@@ -15,7 +15,7 @@ measurement, not guessed, so a wrong change doesn't cost a hardware cycle.
 
 - [x] Capture a baseline: `ping` the Pico for ≥ 60 s while idle and again during a
       MIDI Maze match. Record min/avg/max/mdev and packet loss for each.
-- [ ] Read the affected unit's `WIFI_POWER` config value (boot menu / serial) and
+- [x] Read the affected unit's `WIFI_POWER` config value (boot menu / serial) and
       log the resolved `pmValue` at `rp/src/network.c:483`. Confirm whether PM is
       actually disabled (`0xa11140`) on *this* unit or set to a powersave mode.
 - [x] Confirm `0xa11140` (`NETWORK_POWER_MGMT_DISABLED`, `network.h:49`) is the
@@ -73,9 +73,10 @@ every link-up, and ensure the unit's `WIFI_POWER` is `0` (disabled). Validate by
 re-running this instrumentation + ping: the poll gap stays ~ms (unchanged) while
 idle RTT collapses to single-digit ms.
 
-*Open data point (folded into STORY-02 validation):* the unit's currently stored
-`WIFI_POWER` value, to know whether disabled-but-ineffective (timing) or an actual
-powersave value is set. The fix is correct either way.
+*Resolved:* on-device PM logging showed the applied word was `0xa11142`
+(`CYW43_PERFORMANCE_PM`) — the unit's `WIFI_POWER` was set to a power-save mode
+(value 1 or 3), not `0`. RSSI measured -41 dBm, so RF was ruled out. STORY-02
+forces PM off regardless of `WIFI_POWER`, validated on hardware (idle RTT flat).
 
 
 ### Power-management constant — confirmed correct (no bug)
