@@ -44,6 +44,12 @@ docker run -d --name midi2ip \
 - Hardware ST/Pico or Hatari: point at `<host>:5005` (TCP) or `<host>:5006` (ws).
 - Rooms persist in the `midi2ip-data` volume (`/data/rooms.json`).
 
+Or use the helper (all defaults, admin key only):
+
+```sh
+docker/run.sh <ADMIN_KEY>
+```
+
 ## Parameters
 
 Every orchestrator parameter is set via an env var — see `.env.example`
