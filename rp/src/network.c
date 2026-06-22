@@ -11,6 +11,10 @@ static uint8_t cyw43Mac[NETWORK_MAC_SIZE];
 static char cyw43MacStr[NETWORK_MAX_STRING_LENGTH];
 static wifi_sta_conn_status_t connectionStatus = DISCONNECTED;
 static char connectionStatusStr[NETWORK_MAX_STRING_LENGTH] = {0};
+// EPIC-16: the resolved Wi-Fi power-management word (from PARAM_WIFI_POWER).
+// Re-applied on every link-up because a pre-association cyw43_wifi_pm() does
+// not survive the join. Defaults to PM disabled until network_wifiInit() runs.
+static uint32_t staPmValue = NETWORK_POWER_MGMT_DISABLED;
 #if LWIP_MDNS_RESPONDER
 // mDNS lifecycle flags. The lwIP mDNS responder must be initialized at
 // most once per boot, and a netif may have at most one service entry
@@ -481,6 +485,8 @@ int network_wifiInit(wifi_mode_t mode) {
     }
   }
   DPRINTF("Setting power management to: %08x\n", pmValue);
+  // Remember it; wifiLinkCallback re-applies it after association (EPIC-16).
+  staPmValue = pmValue;
   cyw43_wifi_pm(&cyw43_state, pmValue);
   return 0;
 }
@@ -603,8 +609,16 @@ int network_scanIsActive() {
 wifi_scan_data_t *network_getFoundNetworks() { return &wifiScanData; }
 
 static void wifiLinkCallback(struct netif *netif) {
-  DPRINTF("WiFi Link: %s\n", (netif_is_link_up(netif) ? "UP" : "DOWN"));
-  if (!netif_is_link_up(netif)) {
+  bool up = netif_is_link_up(netif);
+  DPRINTF("WiFi Link: %s\n", (up ? "UP" : "DOWN"));
+  if (up) {
+    // EPIC-16: (re)apply power management now that the STA has associated.
+    // Setting it in network_wifiInit() before the join does not stick — the
+    // chip falls back to its default PM2 power-save, which made idle ICMP RTT
+    // swing 5-660 ms (low only under continuous traffic). Re-applying here also
+    // covers reconnects.
+    cyw43_wifi_pm(&cyw43_state, staPmValue);
+  } else {
     // Drop currentIp / status / status string so callers don't keep
     // serving stale values after a link drop.
     network_resetConnectionState();
