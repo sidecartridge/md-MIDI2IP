@@ -209,13 +209,20 @@ class Conn:
         self._writer = writer
         self.socket = writer.get_extra_info("socket")
         self.peername = writer.get_extra_info("peername")
+        # Real client IP when behind the trusted in-container reverse proxy; set by
+        # handle_ws from X-Real-IP / X-Forwarded-For. None -> use the socket peer.
+        self.client_ip: "str | None" = None
 
     @property
     def peer(self) -> str:
-        return f"{self.peername[0]}:{self.peername[1]}" if self.peername else "?"
+        if not self.peername:
+            return "?"
+        return f"{self.ip}:{self.peername[1]}"
 
     @property
     def ip(self) -> str:
+        if self.client_ip:
+            return self.client_ip
         return self.peername[0] if self.peername else "?"
 
     def tune(self) -> None:
@@ -627,6 +634,22 @@ async def handle_player(
     await handle_conn(TcpConn(reader, writer), DEFAULT_ROOM)
 
 
+# Loopback peers are the in-container nginx reverse proxy (D-16): only then do we
+# trust an X-Real-IP / X-Forwarded-For header for the real client IP, so a direct
+# client to the exposed WS port cannot spoof its address.
+_LOOPBACK_PEERS = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+
+
+def _forwarded_client_ip(peer_ip: str, headers: "dict[str, str]") -> "str | None":
+    if peer_ip not in _LOOPBACK_PEERS:
+        return None
+    xri = headers.get("x-real-ip", "").strip()
+    if xri:
+        return xri
+    first = headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return first or None
+
+
 async def handle_ws(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
@@ -695,7 +718,11 @@ async def handle_ws(
     except (ConnectionError, OSError):
         writer.close()
         return
-    await handle_conn(WsConn(reader, writer), room_key)
+    conn = WsConn(reader, writer)
+    fwd = _forwarded_client_ip(conn.ip, headers)
+    if fwd:
+        conn.client_ip = fwd  # report the real browser IP, not the local proxy
+    await handle_conn(conn, room_key)
 
 
 # --- STORY-03: HTTP status -------------------------------------------------

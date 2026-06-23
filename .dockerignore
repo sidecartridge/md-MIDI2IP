@@ -1,0 +1,11 @@
+# Only the orchestrator, the web-app source, and the docker assets are needed.
+*
+!orchestrator
+!midi-maze-js
+!docker
+# Drop heavy/generated bits from the whitelisted trees
+**/__pycache__
+**/*.pyc
+midi-maze-js/node_modules
+midi-maze-js/dist
+midi-maze-js/.git
