@@ -221,6 +221,30 @@ A room key gates a ring; it is not a password for the traffic. Without TLS it tr
 clear text, so use a reverse proxy for TLS and to guard the admin REST API on an exposed
 deployment.
 
+## 🐳 Docker deployment
+
+A single Docker image runs the **orchestrator** (game TCP 5005, WebSocket 5006,
+HTTP/REST 8080) **and** serves the
+[midi-maze-js](https://github.com/diegoparrilla/midi-maze-js) browser game on
+**port 80**, under one supervisor — so any server becomes a complete
+MIDI-Maze-over-IP host for browsers and hardware nodes alike. Full guide:
+[`docker/README.md`](docker/README.md).
+
+```sh
+git submodule update --init                  # fetch the midi-maze-js submodule
+docker build -f docker/Dockerfile -t md-midi2ip .
+docker/run.sh <ADMIN_KEY>                    # launch with all defaults
+```
+
+- **Single-port mode:** nginx also proxies `ws://<host>/ws` → the WebSocket and
+  `http://<host>/rooms` → the REST API, so the whole app works over `:80` alone
+  (handy behind a firewall/domain). The direct ports stay exposed too.
+- **Remote install:** `docker/deploy.sh root@server` builds locally, installs Docker
+  on the server, opens the firewall, loads the image, and copies the launcher.
+- Rooms persist on a `/data` volume; every orchestrator flag maps to an env var
+  (`ADMIN_KEY`, `ROOM_TTL`, `INSPECT`, …).
+- No TLS (plain http/ws) — terminate TLS at a reverse proxy if you expose it (D-13).
+
 ## 🙏 Acknowledgements
 
 - **Jesús Ángel González Gorrado**: his *Trabajo Fin de Grado* is a great piece of work
@@ -242,17 +266,3 @@ deployment.
 ## 📄 License
 
 The source code of the project is licensed under the GNU General Public License v3.0. The full license is accessible in the [LICENSE](LICENSE) file.
-
-## Docker deployment
-
-A single Docker image runs the orchestrator (all ports) and serves the
-[midi-maze-js](https://github.com/diegoparrilla/midi-maze-js) web app on port 80,
-so any server can host MIDI Maze over IP for browsers and hardware nodes alike.
-See [`docker/README.md`](docker/README.md). Quick start:
-
-```sh
-git submodule update --init
-docker build -f docker/Dockerfile -t md-midi2ip .
-docker run -d -p 80:80 -p 5005:5005 -p 5006:5006 -p 8080:8080 \
-  -v midi2ip-data:/data md-midi2ip
-```
