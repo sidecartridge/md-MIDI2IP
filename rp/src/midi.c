@@ -25,6 +25,7 @@
 #include "commemul.h"   // DEBUG: ring instrumentation
 #include "constants.h"  // __rom_in_ram_start__
 #include "debug.h"
+#include "lwip/dns.h"
 #include "lwip/ip_addr.h"
 #include "lwip/tcp.h"
 #include "memfunc.h"  // WRITE_AND_SWAP_LONGWORD
@@ -445,13 +446,12 @@ static err_t midi_net_connected_cb(void *arg, struct tcp_pcb *pcb, err_t err) {
   return ERR_OK;
 }
 
-static void midi_net_try_connect(void) {
-  ip_addr_t ip;
-  if (!ipaddr_aton(midiNetHost, &ip)) {
-    return;
-  }
+// Open the PCB and connect to an already-resolved address. Shared by the numeric
+// (ipaddr_aton) and DNS-resolved (midi_net_dns_found) paths (EPIC-18).
+static void midi_net_connect_to(const ip_addr_t *ip) {
   midiNetPcb = tcp_new();
   if (midiNetPcb == NULL) {
+    midi_net_reset();
     return;
   }
   tcp_nagle_disable(
@@ -460,8 +460,46 @@ static void midi_net_try_connect(void) {
   tcp_recv(midiNetPcb, midi_net_recv_cb);
   tcp_err(midiNetPcb, midi_net_err_cb);
   midiNetState = MIDI_NET_CONNECTING;
-  if (tcp_connect(midiNetPcb, &ip, midiNetPort, midi_net_connected_cb) !=
+  if (tcp_connect(midiNetPcb, ip, midiNetPort, midi_net_connected_cb) !=
       ERR_OK) {
+    midi_net_reset();
+  }
+}
+
+// lwIP async DNS callback (EPIC-18): connect once the orchestrator hostname
+// resolves. ipaddr == NULL means the lookup failed/timed out, so reset and let
+// the reconnect backoff retry.
+static void midi_net_dns_found(const char *name, const ip_addr_t *ipaddr,
+                               void *arg) {
+  (void)name;
+  (void)arg;
+  if (ipaddr == NULL) {
+    DPRINTF("MIDI net: DNS lookup failed for '%s'\n", midiNetHost);
+    midi_net_reset();
+    return;
+  }
+  midi_net_connect_to(ipaddr);
+}
+
+static void midi_net_try_connect(void) {
+  ip_addr_t ip;
+  // Numeric IP literal: connect straight away (fast path).
+  if (ipaddr_aton(midiNetHost, &ip)) {
+    midi_net_connect_to(&ip);
+    return;
+  }
+  // Otherwise resolve the hostname via lwIP DNS (EPIC-18). Servers come from DHCP
+  // or the static WIFI_DNS config. Mark the attempt in progress so the poll loop
+  // does not start a second resolve. dns_gethostbyname: ERR_OK = cached (connect
+  // now), ERR_INPROGRESS = query started (midi_net_dns_found fires later), else an
+  // immediate error.
+  midiNetState = MIDI_NET_CONNECTING;
+  err_t err = dns_gethostbyname(midiNetHost, &ip, midi_net_dns_found, NULL);
+  if (err == ERR_OK) {
+    midi_net_connect_to(&ip);
+  } else if (err != ERR_INPROGRESS) {
+    DPRINTF("MIDI net: dns_gethostbyname('%s') failed: %d\n", midiNetHost,
+            (int)err);
     midi_net_reset();
   }
 }
