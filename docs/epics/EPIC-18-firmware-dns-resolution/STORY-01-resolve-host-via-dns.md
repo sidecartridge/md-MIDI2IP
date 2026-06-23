@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-18
 title: Resolve the orchestrator host via lwIP DNS
-status: in-progress
+status: done
 ---
 
 ## Goal

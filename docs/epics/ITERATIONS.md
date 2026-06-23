@@ -14,7 +14,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 5 | Private rooms (room-key MIDI rings) | done |
 | 6 | Robustness pass: buffer cleanup on disconnect | done |
 | 7 | Network reliability & latency pass | done |
-| 8 | Dockerized deployment + firmware connectivity | in-progress |
+| 8 | Dockerized deployment + firmware connectivity | done |
 
 ---
 
@@ -241,6 +241,6 @@ persisted to a mounted volume.
 | Epic | Status | Note |
 | --- | --- | --- |
 | EPIC-17 · Dockerized deployment | done | single image: orchestrator (all ports) + nginx-served midi-maze-js on :80; merged (PR #16) |
-| EPIC-18 · Firmware hostname (DNS) resolution | in-progress | firmware resolves MIDI_HOST via lwIP DNS so it can reach the orchestrator by domain |
+| EPIC-18 · Firmware hostname (DNS) resolution | done | firmware resolves MIDI_HOST via lwIP DNS so it can reach the orchestrator by domain |
 
-**Outcome:** EPIC-17 landed (the single Docker image, merged PR #16). EPIC-18 adds firmware DNS resolution so a node can reach the dockerized orchestrator by hostname. _In progress._
+**Outcome:** both epics shipped. EPIC-17 delivered the single Docker image (orchestrator on all ports + nginx-served midi-maze-js on :80, with a `/ws`+`/rooms` single-port proxy, real-client-IP passthrough, and `run.sh`/`deploy.sh`; merged PR #16). EPIC-18 made the firmware resolve `MIDI_HOST` via lwIP DNS so a node reaches the dockerized orchestrator by hostname (e.g. `midimaze.sidecartridge.com`), verified on hardware (merged PR #17). **Iteration complete.**

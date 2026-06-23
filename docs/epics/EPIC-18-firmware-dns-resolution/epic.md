@@ -2,7 +2,7 @@
 id: EPIC-18
 iteration: 8
 title: Firmware orchestrator hostname (DNS) resolution
-status: todo
+status: done
 ---
 
 ## Goal
