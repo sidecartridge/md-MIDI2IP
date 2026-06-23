@@ -14,7 +14,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 5 | Private rooms (room-key MIDI rings) | done |
 | 6 | Robustness pass: buffer cleanup on disconnect | done |
 | 7 | Network reliability & latency pass | done |
-| 8 | Dockerized deployment (orchestrator + web app) | todo |
+| 8 | Dockerized deployment + firmware connectivity | in-progress |
 
 ---
 
@@ -240,6 +240,7 @@ persisted to a mounted volume.
 
 | Epic | Status | Note |
 | --- | --- | --- |
-| EPIC-17 · Dockerized deployment | todo | single image: orchestrator (all ports) + nginx-served midi-maze-js on :80, deployable anywhere |
+| EPIC-17 · Dockerized deployment | done | single image: orchestrator (all ports) + nginx-served midi-maze-js on :80; merged (PR #16) |
+| EPIC-18 · Firmware hostname (DNS) resolution | in-progress | firmware resolves MIDI_HOST via lwIP DNS so it can reach the orchestrator by domain |
 
-**Outcome:** _todo._
+**Outcome:** EPIC-17 landed (the single Docker image, merged PR #16). EPIC-18 adds firmware DNS resolution so a node can reach the dockerized orchestrator by hostname. _In progress._
