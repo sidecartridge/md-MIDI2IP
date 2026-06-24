@@ -208,7 +208,7 @@ candidate.
 
 | Epic | Status | Note |
 | --- | --- | --- |
-| EPIC-16 · Network reliability & latency pass | done | Wi-Fi power-save forced off (D-15); merged to main as v1.1.1beta (PR #15) |
+| EPIC-16 · Network reliability & latency pass | done | Wi-Fi power-save forced off (D-15); merged to main as v1.1.0beta (PR #15) |
 
 **Outcome:** the cause was Wi-Fi power-save, not the firmware loop. On-device poll-gap
 instrumentation (STORY-01) proved the Core-0 loop healthy (worst gap ~5.3 ms while idle RTT
@@ -221,7 +221,7 @@ callback re-enters the driver and no-ops), and the "disabled" constant was `0xa1
 (`PERFORMANCE_PM` with the mode nibble zeroed, still carrying a ~1 s listen interval) rather
 than the real `CYW43_NONE_PM` (`0x10`). Since power-save is incompatible with the lock-step
 ring (C-01), the firmware now **forces PM off unconditionally and ignores `WIFI_POWER`**
-(D-15). Validated on hardware: idle RTT is flat at single-digit ms. **Merged to `main` as v1.1.1beta (PR #15); iteration complete.**
+(D-15). Validated on hardware: idle RTT is flat at single-digit ms. **Merged to `main` as v1.1.0beta (PR #15); iteration complete.**
 
 
 ---

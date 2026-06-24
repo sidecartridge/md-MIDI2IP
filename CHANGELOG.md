@@ -1,6 +1,29 @@
 # Changelog
 
-## v1.1.1beta (2026-06-22)
+## v1.1.1beta (2026-06-23)
+
+### Run your own server with Docker (new)
+
+- A single Docker image now hosts the whole server side: the orchestrator (game,
+  WebSocket, and status/REST ports) plus the `midi-maze-js` browser game on port 80,
+  so any machine can host MIDI Maze over IP for browsers and hardware nodes alike. It
+  ships with a one-argument launcher and a remote installer, and a single-port mode
+  (everything over port 80) for servers behind a firewall or domain. See
+  `docker/README.md`.
+
+### Connect to the orchestrator by name (new)
+
+- A node can now point at the orchestrator by **hostname** (e.g.
+  `midimaze.sidecartridge.com`), not just a numeric IP address — the firmware
+  resolves the name via DNS before connecting.
+
+### More reliable multiplayer
+
+- The server now notices when a WebSocket player drops without a clean close (lost
+  network, closed browser tab) and removes it from the ring within about 30 seconds,
+  instead of leaving a "ghost" player that stalled the game.
+
+## v1.1.0beta (2026-06-22)
 
 ### More reliable Wi-Fi (network latency fix)
 
