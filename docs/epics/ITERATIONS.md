@@ -15,7 +15,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 6 | Robustness pass: buffer cleanup on disconnect | done |
 | 7 | Network reliability & latency pass | done |
 | 8 | Dockerized deployment + firmware connectivity | done |
-| 9 | Robustness: WebSocket liveness | in-progress |
+| 9 | Robustness: WebSocket liveness | done |
 
 ---
 
@@ -261,6 +261,6 @@ a silent peer within the idle timeout.
 
 | Epic | Status | Note |
 | --- | --- | --- |
-| EPIC-19 · WebSocket liveness | in-progress | server WS ping/pong heartbeat evicts a silently-dropped node (~30 s) |
+| EPIC-19 · WebSocket liveness | done | server WS ping/pong heartbeat evicts a silently-dropped node (~30 s) |
 
-**Outcome:** _in progress._
+**Outcome:** shipped (merged PR #18). The orchestrator drives a WebSocket ping/pong heartbeat that traverses the nginx proxy: a node that drops without a clean close is evicted within ~30 s (no inbound frame/pong) instead of lingering for minutes, so a phantom no longer breaks the ring. TCP carriers keep relying on TCP keepalive; no client changes were needed. **Iteration complete.**

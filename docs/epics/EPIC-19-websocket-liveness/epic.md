@@ -2,7 +2,7 @@
 id: EPIC-19
 iteration: 9
 title: WebSocket liveness — evict silently-dropped nodes
-status: in-progress
+status: done
 ---
 
 ## Goal
