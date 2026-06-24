@@ -15,6 +15,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 6 | Robustness pass: buffer cleanup on disconnect | done |
 | 7 | Network reliability & latency pass | done |
 | 8 | Dockerized deployment + firmware connectivity | done |
+| 9 | Robustness: WebSocket liveness | in-progress |
 
 ---
 
@@ -244,3 +245,22 @@ persisted to a mounted volume.
 | EPIC-18 · Firmware hostname (DNS) resolution | done | firmware resolves MIDI_HOST via lwIP DNS so it can reach the orchestrator by domain |
 
 **Outcome:** both epics shipped. EPIC-17 delivered the single Docker image (orchestrator on all ports + nginx-served midi-maze-js on :80, with a `/ws`+`/rooms` single-port proxy, real-client-IP passthrough, and `run.sh`/`deploy.sh`; merged PR #16). EPIC-18 made the firmware resolve `MIDI_HOST` via lwIP DNS so a node reaches the dockerized orchestrator by hostname (e.g. `midimaze.sidecartridge.com`), verified on hardware (merged PR #17). **Iteration complete.**
+
+
+---
+
+## Iteration 9: Robustness — WebSocket liveness
+
+**Goal:** evict a WebSocket node that dropped without a clean close so a phantom does
+not linger in the ring and break gameplay. Critical behind the nginx proxy (EPIC-17):
+the orchestrator's TCP peer is the always-alive proxy, so TCP keepalive cannot detect
+a dead browser. A server-driven WS ping/pong heartbeat traverses the proxy and evicts
+a silent peer within the idle timeout.
+
+**Epics**
+
+| Epic | Status | Note |
+| --- | --- | --- |
+| EPIC-19 · WebSocket liveness | in-progress | server WS ping/pong heartbeat evicts a silently-dropped node (~30 s) |
+
+**Outcome:** _in progress._
