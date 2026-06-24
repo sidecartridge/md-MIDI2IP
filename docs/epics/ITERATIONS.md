@@ -16,6 +16,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 7 | Network reliability & latency pass | done |
 | 8 | Dockerized deployment + firmware connectivity | done |
 | 9 | Robustness: WebSocket liveness | done |
+| 10 | Deployment performance / latency | in-progress |
 
 ---
 
@@ -264,3 +265,20 @@ a silent peer within the idle timeout.
 | EPIC-19 · WebSocket liveness | done | server WS ping/pong heartbeat evicts a silently-dropped node (~30 s) |
 
 **Outcome:** shipped (merged PR #18). The orchestrator drives a WebSocket ping/pong heartbeat that traverses the nginx proxy: a node that drops without a clean close is evicted within ~30 s (no inbound frame/pong) instead of lingering for minutes, so a phantom no longer breaks the ring. TCP carriers keep relying on TCP keepalive; no client changes were needed. **Iteration complete.**
+
+
+---
+
+## Iteration 10: Deployment performance / latency
+
+**Goal:** cut avoidable per-hop latency in the dockerized deployment for the
+latency-sensitive MIDI ring (C-01) — remove Docker's NAT/userland-proxy hop and tune
+the nginx WebSocket proxy to forward MIDI frames immediately.
+
+**Epics**
+
+| Epic | Status | Note |
+| --- | --- | --- |
+| EPIC-20 · Reduce deployment latency | in-progress | NETWORK=host launch option + nginx /ws proxy_buffering off / tcp_nodelay |
+
+**Outcome:** _in progress._
