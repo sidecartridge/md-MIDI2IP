@@ -274,12 +274,20 @@ class WsConn(Conn):
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         super().__init__(reader, writer)
         self._dec = ws.FrameDecoder()
+        # Event-loop time of the last inbound frame (any opcode, incl. pong). The
+        # WS heartbeat (EPIC-19) uses it to evict a peer that has gone silent.
+        self.last_rx = 0.0
+
+    def ping(self) -> None:
+        """Send an unmasked WS ping (server->client) to probe liveness (EPIC-19)."""
+        self._writer.write(ws.encode_frame(ws.OP_PING))
 
     async def recv(self) -> bytes:
         while True:
             raw = await self._reader.read(4096)
             if not raw:
                 return b""  # TCP EOF
+            self.last_rx = asyncio.get_event_loop().time()  # any frame = liveness
             out = bytearray()
             for opcode, payload in self._dec.feed(raw):
                 if opcode in (ws.OP_BINARY, ws.OP_CONT, ws.OP_TEXT):
@@ -523,6 +531,35 @@ async def _resolve_host(player: Player) -> None:
     player.host = host
 
 
+# EPIC-19: WebSocket liveness. Behind a reverse proxy the orchestrator's TCP peer
+# is the proxy (always alive on loopback), so TCP keepalive cannot see a silently
+# dropped browser and the phantom lingers in the ring. Drive a WS ping/pong
+# heartbeat that traverses the proxy: ping every interval and evict a player whose
+# last inbound frame (data or pong) is older than the idle timeout. All clients
+# answer pings with a pong (browsers automatically; firmware + gateway explicitly).
+WS_PING_INTERVAL_S = 10.0
+WS_IDLE_TIMEOUT_S = 30.0
+
+
+async def _ws_heartbeat(player: "Player") -> None:
+    conn = player.conn
+    loop = asyncio.get_event_loop()
+    try:
+        while True:
+            await asyncio.sleep(WS_PING_INTERVAL_S)
+            if loop.time() - conn.last_rx > WS_IDLE_TIMEOUT_S:
+                _drop_player(player, "WebSocket idle (no pong) - peer gone")
+                return
+            try:
+                conn.ping()
+                await conn.drain()
+            except (ConnectionError, OSError):
+                _drop_player(player, "WebSocket ping failed - peer gone")
+                return
+    except asyncio.CancelledError:
+        pass
+
+
 async def handle_conn(conn: "Conn", room_key: str = DEFAULT_ROOM) -> None:
     """Per-connection relay, transport-agnostic (EPIC-13 STORY-03): register, relay
     this player's OUT to the next player's IN until EOF, deregister. Hardened
@@ -573,6 +610,15 @@ async def handle_conn(conn: "Conn", room_key: str = DEFAULT_ROOM) -> None:
     LOG.info("player %d connected from %s via %s, room '%s' (%d in room)",
              player.id, peer, conn.transport, room_key, len(reg))
 
+    # EPIC-19: a WS peer behind a proxy needs an application-level heartbeat (TCP
+    # keepalive only sees the proxy). TCP carriers rely on keepalive as before.
+    hb_task = None
+    if conn.transport == "ws":
+        conn.last_rx = now
+        hb_task = asyncio.ensure_future(_ws_heartbeat(player))
+        _bg_tasks.add(hb_task)
+        hb_task.add_done_callback(_bg_tasks.discard)
+
     try:
         while True:
             data = await conn.recv()
@@ -613,6 +659,8 @@ async def handle_conn(conn: "Conn", room_key: str = DEFAULT_ROOM) -> None:
     except Exception:  # one bad connection must never take down the server
         LOG.exception("player %d (%s) handler crashed", player.id, peer)
     finally:
+        if hb_task is not None:
+            hb_task.cancel()
         reg.remove(player.id)
         conn.close()  # don't await wait_closed(): can hang under shutdown-cancel
         LOG.info(
