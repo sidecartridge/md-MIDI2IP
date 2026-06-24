@@ -2,7 +2,7 @@
 id: STORY-01
 epic: EPIC-20
 title: Host networking + nginx WS-path tuning
-status: in-progress
+status: done
 ---
 
 ## Goal
@@ -17,7 +17,7 @@ forwarding through nginx.
 - [x] nginx `/ws`: `proxy_buffering off` + `proxy_socket_keepalive on`; `tcp_nodelay
       on` at the server.
 - [x] Build + validate: nginx config valid and the WS handshake still upgrades (101).
-- [ ] Confirm on the Linux server with `NETWORK=host` (host mode is a no-op on macOS).
+- [x] Confirm on the Linux server with `NETWORK=host` (host mode is a no-op on macOS).
 
 ## Acceptance
 

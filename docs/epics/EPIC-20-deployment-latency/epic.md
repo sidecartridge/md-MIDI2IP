@@ -2,7 +2,7 @@
 id: EPIC-20
 iteration: 10
 title: Reduce deployment latency (host networking + nginx WS tuning)
-status: in-progress
+status: done
 ---
 
 ## Goal

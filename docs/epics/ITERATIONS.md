@@ -16,7 +16,7 @@ narrative: the goal, scope, and **outcome** of each iteration.
 | 7 | Network reliability & latency pass | done |
 | 8 | Dockerized deployment + firmware connectivity | done |
 | 9 | Robustness: WebSocket liveness | done |
-| 10 | Deployment performance / latency | in-progress |
+| 10 | Deployment performance / latency | done |
 
 ---
 
@@ -279,6 +279,6 @@ the nginx WebSocket proxy to forward MIDI frames immediately.
 
 | Epic | Status | Note |
 | --- | --- | --- |
-| EPIC-20 · Reduce deployment latency | in-progress | NETWORK=host launch option + nginx /ws proxy_buffering off / tcp_nodelay |
+| EPIC-20 · Reduce deployment latency | done | NETWORK=host launch option + nginx /ws proxy_buffering off / tcp_nodelay |
 
-**Outcome:** _in progress._
+**Outcome:** shipped. `run.sh` gained a `NETWORK=host` mode that drops Docker's NAT/userland-proxy hop on the Linux server, and the nginx `/ws` proxy forwards MIDI frames immediately (`proxy_buffering off` + `proxy_socket_keepalive on` + `tcp_nodelay on`). The lowest-latency client path remains a direct `ws://host:5006`; WAN RTT stays the dominant factor for the lock-step ring. Verified on the server. **Iteration complete.**
