@@ -23,6 +23,8 @@
   network, closed browser tab) and removes it from the ring within about 30 seconds,
   instead of leaving a "ghost" player that stalled the game.
 
+---
+
 ## v1.1.0beta (2026-06-22)
 
 ### More reliable Wi-Fi (network latency fix)
@@ -33,6 +35,8 @@
   to nearly a second, with occasional dropouts — enough to stall MIDI Maze's lock-step ring
   and time out a match start. Power management is now forced off (the old `WIFI_POWER` option
   is ignored), so latency stays flat.
+
+---
 
 ## v1.0.0beta (2026-06-18)
 
