@@ -83,6 +83,18 @@ the **real browser IP** in its console/telemetry/reverse-DNS (via `X-Real-IP` /
 `X-Forwarded-For`). It only trusts those headers from the in-container proxy
 (loopback peer), so a direct client to the exposed `:5006` cannot spoof its address.
 
+## Performance / latency
+
+- **Host networking (Linux):** `NETWORK=host docker/run.sh <ADMIN_KEY>` shares the
+  host network stack (no Docker NAT/userland-proxy hop) for lowest latency / highest
+  throughput. Ports bind directly on the host; `ufw` rules still apply.
+- **nginx `/ws`** uses `proxy_buffering off` + `tcp_nodelay`, so MIDI frames are
+  forwarded immediately.
+- **Lowest-latency client path:** connect the browser directly to `ws://<host>:5006`
+  (skip the `/ws` proxy hop); the proxy is the single-port convenience. Note: the
+  dominant latency for the lock-step ring is the internet RTT between players and the
+  server, which these tunings cannot change.
+
 ## Parameters
 
 Every orchestrator parameter is an env var — see `.env.example`:
