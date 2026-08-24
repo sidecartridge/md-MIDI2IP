@@ -2,6 +2,8 @@
 
 MIDI-to-IP is a microfirmware for the SidecarTridge Multi-device that redirects all the MIDI IN and OUT traffic from an Atari ST computer to a network endpoint, by hooking the BIOS device-3 calls (`Bconstat`/`Bconin`/`Bconout`). It runs on a Raspberry Pi Pico (RP2040) plugged into the Multi-device cartridge slot for Atari ST / STE / MegaST(E) computers.
 
+> 🛒 **Get the hardware:** [SidecarTridge Multi-device](https://sidecartridge.com/products/sidecartridge-multidevice-atari-st/)
+
 # ⚠️ ATTENTION! READ THIS FIRST
 
 General build and usage of SidecarTridge Multi-device microfirmware apps is documented in the official [SidecarTridge Multi-device documentation](https://docs.sidecartridge.com/sidecartridge-multidevice/programming/). To avoid inconsistencies and outdated information, we've centralized the shared instructions there. Please refer to the official documentation for the latest guidance.
