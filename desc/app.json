@@ -2,7 +2,7 @@
   "uuid": "<APP_UUID>",
   "name": "MIDI-to-IP",
   "description": "For MIDI Maze game, redirects Atari ST MIDI IN/OUT traffic to a network endpoint. This allows you to play MIDI Maze over a network with other players.  <a target='_blank' rel='noopener noreferrer' href='https://docs.sidecartridge.com/sidecartridge-multidevice/microfirmwares/midi-to-ip/'>Learn how</a> ",
-  "image": "https://placehold.co/256x256/png",
+  "image": "https://raw.githubusercontent.com/sidecartridge/md-MIDI2IP/main/icon.png",
   "tags": [
     "MIDI",
     "Network"
